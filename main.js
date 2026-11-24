@@ -30,6 +30,7 @@ const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', '
 const nightDate = n => { const d = new Date(1999, 10, 22 + (n || 1)); return `${MONTHS[d.getMonth()]} ${d.getDate()} 1999`; };   // night 1 = NOV 23 1999
 const tonight = () => nightDate(typeof night !== 'undefined' && night ? night.n : (typeof G !== 'undefined' && G && G.night) || 1);
 const MANAGER = { name: 'Dan Mercer', role: 'Night Manager', code: 'MGR-0071' };
+const PLACES = ["Hal's Diner on Route 9", 'the laundromat on Birch Street', 'a night shift at Mercy Hospital', 'the Pinewood bowling alley', "Dot's Bar", 'the Gas-N-Go out by the highway', 'the Greyhound depot', 'choir practice at St. Agnes', 'the late show at the Rialto', "my sister's place in Elm Grove", 'the 24-hour pharmacy', 'bingo at the Legion hall', 'the video store on Main', 'the paper mill, second shift'];
 const VIP_TITLES = ['Hotel Owner', 'Regional Director', 'State Health Inspector', 'Film Producer', "Senator's Aide", 'Bank Auditor', 'Insurance Assessor'];
 const VIP_PATIENCE = 30;   // seconds a real VIP will wait at the window before complaining
 (window.VOICE_EL ||= []).push('mgr_visit', 'mgr_logbook', 'mgr_vipcall');
@@ -76,7 +77,7 @@ const MTYPES = {
 
 const MAX_NIGHT = 11;
 const BRIEF = {
-  1: { title: 'NIGHT ONE', key: 'mgr_n1', newTypes: ['hollow', 'grinner', 'gaunt'] },
+  1: { title: 'NIGHT ONE', key: 'mgr_n1', newTypes: ['hollow', 'grinner', 'gaunt'], notes: ['Residents sign out at the desk. Ask <b>"Where are you coming from?"</b> (Talk, 2): the answer must match where the <b>Ledger</b> says they went. Anything that gets it wrong is not them.', 'There is <b>coffee</b> on the desk. Click the mug for a sip. It lasts about eight.'] },
   2: { title: 'NIGHT TWO', key: 'mgr_n2', newTypes: ['mirror', 'seer', 'stretched', 'twitcher', 'weeper', 'puppet'], notes: ['<b>CAM 03 — THERMAL</b> is online (press 3 in camera view). The living show up warm. Most of them don\'t.', '<b>Staff</b> may come to the gate. Check their card against tonight\'s staff list.', '<b>VIPs</b> are high priority: check their gold pass against the <b>VIP</b> tab in the ledger (name, face, pass code) and decide fast. Keeping a real VIP waiting or turning one away costs warnings. Fakes do turn up.', 'Listen to the <b>radio</b>. Bulletins and calls appear under <b>Notices</b> in the ledger.'] },
   3: { title: 'NIGHT THREE', key: 'mgr_n3', extra: 'mgr_uv', newTypes: ['copy', 'lookalike', 'crawler', 'echo', 'mannequin', 'impostor'], notes: ['<b>The night manager</b>, Dan Mercer, may come to the gate. Check the date tonight against the <b>MANAGER ROTA</b> (Ledger → Staff). On his nights, let him in: he will step into the booth through the side door. On any other night it is not him, whatever badge it shows.', '<b>UV LAMP</b>: press U while looking at a card. Real resident and staff cards show a glowing hotel seal.', '<b>Check-outs</b>: residents leaving the hotel come to your window from inside. Check their card and stamp them out (A). Anyone who checked out no longer lives here.', 'The <b>power</b> can fail. Hit the breaker (G) fast — they know when the lights are off.'] },
   4: { title: 'NIGHT FOUR', key: 'mgr_n4', newTypes: ['still', 'hound', 'backwards', 'usher'], notes: ['<b>Resident cards</b>: every real one carries the red <b>VALIDATED</b> stamp and a <b>signature</b>, was <b>ISSUED</b> before tonight (NOV 23 1999), and reads exactly <b>HOLLOW PINES HOTEL</b>. A card missing any of that was not made here.'] },
@@ -351,7 +352,24 @@ function buildWorld() {
   add(new THREE.ConeGeometry(0.09, 0.12, 8, 1, true), mat(0x2a4a2a, { side: THREE.DoubleSide }), 0, 0.37, 0.07, lamp, { rot: [0.5, 0, 0] });
   world.lampLight = new THREE.PointLight(0xffb060, 1.6, 3, 2); world.lampLight.position.set(-0.92, 1.1, -0.72); scene.add(world.lampLight);
   // clutter
-  add(new THREE.CylinderGeometry(0.04, 0.035, 0.09, 8), mat(0xe8e0d0), 0.38, 0.85, -0.42);
+  // coffee mug: ceramic body + handle, a coffee surface that stays level and sloshes (see coffeeUpdate)
+  {
+    const mug = new THREE.Group(); mug.position.set(0.38, 0.805, -0.42); scene.add(mug);
+    const prof = [[0.0, 0.0], [0.034, 0.0], [0.038, 0.004], [0.039, 0.05], [0.04, 0.094], [0.037, 0.096], [0.0345, 0.092], [0.0335, 0.016], [0.0, 0.014]].map(([x, y]) => new THREE.Vector2(x, y));
+    const cer = mat(0xe8e2d4);
+    const body = new THREE.Mesh(new THREE.LatheGeometry(prof, 28), cer); body.castShadow = true; mug.add(body);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0395, 0.0393, 0.012, 28, 1, true), mat(0x7a1a16)); band.position.y = 0.072; mug.add(band);   // red stripe
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.0065, 8, 18, Math.PI * 1.15), cer);
+    handle.position.set(0.041, 0.05, 0); handle.rotation.z = -Math.PI * 0.57; handle.castShadow = true; mug.add(handle);
+    const liq = new THREE.Group(); mug.add(liq);                        // pivot: kept level in world space
+    const surf = new THREE.Mesh(new THREE.CircleGeometry(0.0333, 28), new THREE.MeshLambertMaterial({ color: 0x3a2214, emissive: 0x0c0603 }));
+    surf.rotation.x = -Math.PI / 2; liq.add(surf);
+    const crema = new THREE.Mesh(new THREE.RingGeometry(0.026, 0.0333, 28), new THREE.MeshLambertMaterial({ color: 0x6a4428 })); crema.rotation.x = -Math.PI / 2; crema.position.y = 0.0004; liq.add(crema);
+    mug.userData = { act: 'coffee', label: 'Coffee' };
+    world.mug = mug; world.mugLiq = liq; world.mugSurf = surf; world.mugCrema = crema;
+    world.mugHome = { p: mug.position.clone(), q: mug.quaternion.clone() };
+    world.coffee = { sips: 8, max: 8, fill: 1, anim: -1, sway: { x: 0, z: 0, vx: 0, vz: 0 }, lastPos: mug.position.clone(), lastVel: new THREE.Vector3() };
+  }
   add(new THREE.CylinderGeometry(0.033, 0.033, 0.005, 8), mat(0x2a1a10), 0.38, 0.893, -0.42);
   const fl = add(new THREE.CylinderGeometry(0.022, 0.028, 0.22, 8), mat(0x202022), -0.18, 0.83, -0.4, scene, { rot: [0, 0, Math.PI / 2] });
   fl.userData = { act: 'flash', label: 'Flashlight (F)' };
@@ -473,6 +491,30 @@ function buildWorld() {
   brk.userData = { act: 'breaker', label: 'Breaker box (G)' };
   world.power = true; world.breakerT = 0;
   // flashlight
+  // flashlight: machined aluminium body with knurled grip, chrome bezel, rubber switch, lanyard ring
+  function buildTorch() {
+    const g = new THREE.Group();
+    const pts = [[0.0, 0.0], [0.013, 0.0], [0.0155, 0.004], [0.0155, 0.012], [0.0145, 0.014]];
+    for (let i = 0; i < 14; i++) { const y = 0.016 + i * 0.0072; pts.push([0.0152, y], [0.0142, y + 0.0036]); }   // knurling
+    pts.push([0.0148, 0.12], [0.0158, 0.128], [0.022, 0.15], [0.0245, 0.168], [0.0255, 0.176], [0.0228, 0.178], [0.0, 0.178]);
+    const body = new THREE.Mesh(new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), 24), mat(0x1d2126)); body.castShadow = true; g.add(body);
+    const bezel = new THREE.Mesh(new THREE.TorusGeometry(0.0238, 0.0028, 8, 24), mat(0xb8bcc2)); bezel.rotation.x = Math.PI / 2; bezel.position.y = 0.177; g.add(bezel);
+    const refl = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.008, 0.012, 20, 1, true), new THREE.MeshLambertMaterial({ color: 0xd8dce0, side: THREE.BackSide })); refl.position.y = 0.17; g.add(refl);
+    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.0215, 20), new THREE.MeshBasicMaterial({ color: 0x3a4048 })); lens.rotation.x = -Math.PI / 2; lens.position.y = 0.1785; g.add(lens);
+    const sw = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.016, 0.006), mat(0x0e0e0e)); sw.position.set(0, 0.135, 0.0165); g.add(sw);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.008, 0.0016, 6, 14), mat(0x8a8e94)); ring.position.set(0, -0.004, 0); ring.rotation.y = Math.PI / 2; g.add(ring);
+    g.userData.lens = lens;
+    return g;
+  }
+  // on the desk (lying down between the ledger and the button panel)
+  const deskTorch = buildTorch(); deskTorch.position.set(-0.3, 0.822, -0.37); deskTorch.rotation.set(0, 0.55, Math.PI / 2); scene.add(deskTorch);
+  deskTorch.userData = { act: 'flash', label: 'Flashlight (F)' };
+  world.deskTorch = deskTorch;
+  // in your hand (child of the camera); a faint beam cone sells the light in the fog
+  const held = buildTorch(); held.rotation.x = -Math.PI / 2 + 0.06; held.rotation.y = -0.08; held.visible = false; cam.add(held);
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(0.3, 1.8, 24, 1, true), new THREE.MeshBasicMaterial({ color: 0xfff0c8, transparent: true, opacity: 0.018, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+  beam.position.y = 0.178 + 0.9; beam.rotation.x = Math.PI; held.add(beam);
+  world.heldTorch = held; world.torchBeam = beam; world.torchT = 0;
   world.flash = new THREE.SpotLight(0xfff2da, 0, 12, 0.32, 0.45, 1.4);
   world.flash.position.set(0.15, -0.15, 0); cam.add(world.flash); cam.add(world.flash.target); world.flash.target.position.set(0, 0, -1);
   // watcher in the woods (camera only)
@@ -654,6 +696,10 @@ function makeVisitor(spec) {
       const r = v.resident; v.g = r.g; v.name = r.name;
       p = JSON.parse(JSON.stringify(r.p));
       r.issued ||= issuedStr();   // (older saves)
+      if (r.status === 'OUT' && !r.out) r.out = pick(PLACES);
+      v.place = r.out || pick(PLACES);
+      // something wearing a resident's face often doesn't know where they really went
+      if (spec.monster && !(MTYPES[spec.monster] || {}).gaunt && Math.random() < 0.5) { v.place = pick(PLACES.filter(x => x !== r.out)); v.placeLie = true; }
       v.id = { type: 'res', name: r.name, room: r.room, idnum: r.idnum, dob: r.dob, exp: r.exp, photo: r.p, uv: true, issued: r.issued, stamp: true, sig: true, org: HOTEL_ORG };
     } else {
       v.g = spec.g || (Math.random() < 0.5 ? 'm' : 'f');
@@ -751,7 +797,7 @@ function makeVisitor(spec) {
 
 function planNight(n) {
   const R = G.residents.filter(r => r.alive && r.status !== 'CHECKED OUT');
-  R.forEach(r => r.status = Math.random() < 0.35 ? 'IN' : 'OUT');
+  R.forEach(r => { r.status = Math.random() < 0.35 ? 'IN' : 'OUT'; r.out = r.status === 'OUT' ? pick(PLACES) : null; });   // residents sign out with where they're going
   const recent = new Set(G.recent || []);
   const fresh_ = arr => shuffle(arr.filter(r => !recent.has(r.name))).concat(shuffle(arr.filter(r => recent.has(r.name))));   // people seen last night go last
   const taken = new Set();
@@ -883,6 +929,84 @@ function playClip(name, { gain = 1, dur = 0, loop = false, offset = 0 } = {}) {
 { const synthPaper = audio.paper.bind(audio); audio.paper = () => { if (!playClip('paper', { gain: 0.55, dur: 0.85 })) synthPaper(); }; }
 // ---- the desk phone: rings until you pick it up (click it or press P); answers itself after 15 s
 let phoneCallPending = null;
+// ---- flashlight + coffee
+function torchClick(on) {   // a stiff tail-cap switch: press ... release
+  if (!audio.ctx) return;
+  audio.noise(0.018, { type: 'highpass', freq: 3200, gain: 0.32, attack: 0.001 });
+  audio.tone(on ? 2100 : 1700, 0.022, { type: 'square', gain: 0.045, endFreq: on ? 1100 : 900 });
+  audio.tone(140, 0.05, { type: 'sine', gain: 0.12, endFreq: 70 });
+  audio.noise(0.014, { type: 'highpass', freq: 4200, gain: 0.18, attack: 0.001, at: 0.075 });
+  audio.tone(on ? 2600 : 2300, 0.016, { type: 'square', gain: 0.025, at: 0.075 });
+}
+function torchUpdate(dt) {
+  const T = world.heldTorch; if (!T) return;
+  world.torchT += ((flashOn ? 1 : 0) - world.torchT) * Math.min(1, dt * 8);
+  const k = world.torchT, on = k > 0.02;
+  T.visible = on; world.deskTorch.visible = !flashOn || k < 0.3;
+  const sway = Math.sin(time * 1.7) * 0.004, dyaw = (look.ty - look.yaw), dp = (look.tp - look.pitch);
+  T.position.set(0.2 + dyaw * 0.06 + sway, -0.24 - (1 - k) * 0.25 + dp * 0.05 + Math.sin(time * 2.3) * 0.003, -0.36);
+  T.userData.lens.material.color.setHex(flashOn ? 0xfff6e0 : 0x3a4048);
+  world.torchBeam.material.opacity = flashOn ? 0.018 * (world.power === false ? 1.6 : 1) : 0;
+}
+function sipCoffee() {
+  const C = world.coffee;
+  if (!C || C.anim >= 0) return;
+  if (C.sips <= 0) { toast('Empty. Just cold dregs at the bottom.', 2.5); audio.tone(300, 0.05, { gain: 0.05 }); return; }
+  C.anim = 0; C.from = { p: world.mug.position.clone(), q: world.mug.quaternion.clone() };
+}
+function slurp() {
+  if (!audio.ctx) return;
+  const n = audio.noise(0.42, { type: 'bandpass', freq: 700, q: 3, gain: 0.16, attack: 0.04 });
+  if (n && n.f) { n.f.frequency.setValueAtTime(500, audio.ctx.currentTime); n.f.frequency.linearRampToValueAtTime(1400, audio.ctx.currentTime + 0.4); }
+  audio.tone(170, 0.11, { type: 'sine', gain: 0.18, endFreq: 105, at: 0.5 });
+  audio.tone(150, 0.1, { type: 'sine', gain: 0.12, endFreq: 95, at: 0.72 });
+}
+const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v1 = new THREE.Vector3(), _e1 = new THREE.Euler();
+function coffeeUpdate(dt) {
+  const C = world.coffee, mug = world.mug; if (!C || !mug || dt <= 0) return;
+  const H = world.mugHome;
+  // ---- sip animation: lift to your face, tip it toward you (further the emptier it is), sip, put it back
+  if (C.anim >= 0) {
+    C.anim += dt;
+    const UP = 0.45, HOLD = 0.85, DOWN = 0.5, t = C.anim;
+    const face = cam.localToWorld(_v1.set(0.0, -0.085, -0.22));
+    const tilt = 0.55 + (1 - C.fill) * 0.75;
+    _e1.set(0, 0, 0); _q1.copy(cam.quaternion).multiply(_q2.setFromEuler(_e1.set(tilt, 0.25, 0)));
+    const ease = x => x * x * (3 - 2 * x);
+    if (t < UP) { const k = ease(t / UP); mug.position.lerpVectors(C.from.p, face, k); mug.quaternion.slerpQuaternions(C.from.q, _q1, k); }
+    else if (t < UP + HOLD) {
+      mug.position.copy(face); mug.quaternion.copy(_q1);
+      if (!C.sipped) { C.sipped = true; slurp(); }
+      C.fill = Math.max(0, (C.sips - (t - UP) / HOLD) / C.max);
+    } else if (t < UP + HOLD + DOWN) {
+      if (!C.done) { C.done = true; C.sips--; C.fill = C.sips / C.max; C.to = { p: mug.position.clone(), q: mug.quaternion.clone() }; }
+      const k = ease((t - UP - HOLD) / DOWN); mug.position.lerpVectors(C.to.p, H.p, k); mug.quaternion.slerpQuaternions(C.to.q, H.q, k);
+    } else {
+      mug.position.copy(H.p); mug.quaternion.copy(H.q); C.anim = -1; C.sipped = C.done = false;
+      audio.tone(220, 0.05, { type: 'sine', gain: 0.1, endFreq: 160 }); audio.noise(0.03, { type: 'lowpass', freq: 900, gain: 0.12 });   // clunk on the desk
+      if (C.sips === 0) toast('That was the last of it.', 2);
+    }
+  }
+  mug.userData.label = C.sips > 0 ? `Coffee — ${C.sips} sip${C.sips > 1 ? 's' : ''} left` : 'Coffee (empty)';
+  // ---- slosh: a damped spring driven by how the mug moves (and by the booth shaking)
+  const vel = _v1.copy(mug.position).sub(C.lastPos).divideScalar(dt); C.lastPos.copy(mug.position);
+  const acc = vel.clone().sub(C.lastVel).divideScalar(dt); C.lastVel.copy(vel);
+  const S = C.sway, kSpring = 90, damp = 3.2;
+  const shakeKick = shake > 0.05 ? (Math.random() - 0.5) * shake * 30 : 0;
+  S.vx += (-kSpring * S.x - damp * S.vx + clamp(acc.z, -40, 40) * 0.9 + shakeKick) * dt;
+  S.vz += (-kSpring * S.z - damp * S.vz - clamp(acc.x, -40, 40) * 0.9 + shakeKick * 0.7) * dt;
+  S.x = clamp(S.x + S.vx * dt, -0.32, 0.32); S.z = clamp(S.z + S.vz * dt, -0.32, 0.32);
+  // ---- keep the surface level in WORLD space, at the current fill height inside the mug
+  const show = C.fill > 0.004;
+  world.mugSurf.visible = world.mugCrema.visible = show;
+  world.mugLiq.position.set(0, 0.016 + C.fill * 0.07, 0);
+  const up = _v1.set(0, 1, 0).applyQuaternion(mug.quaternion);
+  const tiltA = Math.acos(clamp(up.y, -1, 1)), az = Math.atan2(up.x, up.z);
+  _q1.setFromEuler(_e1.set(S.x, az, S.z, 'YXZ'));                                      // level + slosh, facing the tilt direction
+  world.mugLiq.quaternion.copy(mug.quaternion).invert().multiply(_q1);
+  const stretch = 1 / Math.max(0.35, Math.cos(Math.min(tiltA, 1.2)));                   // a tipped cylinder's level cut is an ellipse
+  world.mugSurf.scale.set(1, stretch, 1); world.mugCrema.scale.set(1, stretch, 1);
+}
 function ringPhone(onAnswer) {
   if (MPX.host) MPX.send({ t: 'ring' });
   if (phoneCallPending) { phoneCallPending.ring && phoneCallPending.ring.stop(); }
@@ -998,6 +1122,13 @@ function greet() {
   say(key);
 }
 
+function answerWhere(v) {
+  const line = pick([`I'm coming back from ${v.place}.`, `${v.place[0].toUpperCase() + v.place.slice(1)}. Long night.`, `Just got back from ${v.place}.`, `I was at ${v.place}. Can I come in?`]);
+  audio.static(0.12); audio.tone(900, 0.04, { type: 'square', gain: 0.02 });            // intercom key-up
+  showSub(`"${line}"`, 'Visitor', !!(v.placeLie && v.distort > 0.55)); subTimer = 5;
+  if (MPX.host) MPX.send({ t: 'sub', text: `"${line}"`, who: 'Visitor' });
+  v.saidPlace = true;
+}
 function ask(q) {
   if (!V || V.state !== 'wait') return;
   if (MPX.guest) { if (q === 'close') setTalk(false); else if (q === 'id') requestID(); else MPX.send({ t: 'act', a: 'ask', q }); return; }
@@ -1008,6 +1139,7 @@ function ask(q) {
   if (v.gaunt) { say(v.lines.mshutter, { distort: 1 }); return; }
   v.asked[q] = true;
   if (q === 'who') greet();
+  else if (q === 'where' && v.kind === 'resident' && v.place) answerWhere(v);
   else if (q === 'where') say(v.odd ? v.lines.mwhere : v.lines.where, { distort: v.odd ? Math.max(0.3, v.distort) : v.distort });
   else if (q === 'strange') say(v.odd ? v.lines.mstrange : v.lines.strange, { distort: v.odd ? Math.max(0.3, v.distort) : v.distort });
 }
@@ -1033,6 +1165,7 @@ function decide(admit) {
   v.state = 'leaving';
   world.idCard.visible = false;
   const correct = admit === v.shouldAdmit;
+  if (v.placeLie && v.resident && !v.wrong) v.wrong = `said it was coming from ${v.place}, but the ledger had ${v.resident.name} signed out to ${v.resident.out}`;
   const entry = { name: v.name, kind: v.kind, monster: v.mt ? v.mt.name : null, admit, correct, wrong: v.wrong || v.fakeWhy, resident: v.resident };
   night.log.push(entry);
   if (admit) {
@@ -1403,14 +1536,14 @@ function openLedger(tab = ledgerTab) {
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   const body = $('ledgerBody');
   if (tab === 'res') {
-    body.innerHTML = `<input class="lsearch" id="lsearch" placeholder="Search name, room or ID..."><table><thead><tr><th>PHOTO</th><th>NAME</th><th>ROOM</th><th>RESIDENT ID</th><th>STATUS</th><th>NOTES</th></tr></thead><tbody></tbody></table>`;
+    body.innerHTML = `<input class="lsearch" id="lsearch" placeholder="Search name, room or ID..."><table><thead><tr><th>PHOTO</th><th>NAME</th><th>ROOM</th><th>RESIDENT ID</th><th>STATUS</th><th>SIGNED OUT TO</th><th>NOTES</th></tr></thead><tbody></tbody></table>`;
     const tb = body.querySelector('tbody');
     const sorted = [...G.residents].sort((a, b) => a.room - b.room);
     for (const r of sorted) {
       const tr = document.createElement('tr');
       const st = r.alive ? r.status : 'MISSING';
       const stc = st === 'CHECKED OUT' ? 'GONE' : st;
-      tr.innerHTML = `<td></td><td><b>${r.name}</b></td><td>${r.room}</td><td>${r.idnum}</td><td><span class="st ${stc}">${st}</span></td><td class="dim">${r.note}</td>`;
+      tr.innerHTML = `<td></td><td><b>${r.name}</b></td><td>${r.room}</td><td>${r.idnum}</td><td><span class="st ${stc}">${st}</span></td><td>${st === 'OUT' ? (r.out || '—') : '—'}</td><td class="dim">${r.note}</td>`;
       tr.dataset.s = `${r.name} ${r.room} ${r.idnum}`.toLowerCase();
       if (V && V.kind === 'resident' && V.id && V.idShown && V.id.name.split(' ')[1] === r.name.split(' ')[1]) tr.classList.add('hl');
       const cv = document.createElement('canvas'); cv.width = 40; cv.height = 48; drawPortrait(cv, r.p, { bg: '#b8b0a0' });
@@ -1495,6 +1628,7 @@ function startBriefing() {
 }
 
 function startNight() {
+  if (world.coffee) { const C = world.coffee; C.sips = C.max; C.fill = 1; C.anim = -1; world.mug.position.copy(world.mugHome.p); world.mug.quaternion.copy(world.mugHome.q); }
   if (phoneCallPending) { phoneCallPending.ring && phoneCallPending.ring.stop(); phoneCallPending = null; world.phoneRing = 0; }
   if (inMgr) { scene.remove(inMgr.c.root); inMgr = null; } world.bDoorTarget = 0;
   audio.stopVoice();
@@ -1651,7 +1785,8 @@ function action(a) {
     case 'radioUp': setRadioVol(radioVol + 0.1); break;
     case 'radio': world.radioOn = !world.radioOn; audio.click(); audio.radioTune(world.radioOn ? RADIO[world.radioCh] : null, () => night && night.n >= 3); drawRadio(); updateHUD(); break;
     case 'channel': if (!world.radioOn) { world.radioOn = true; } else world.radioCh = (world.radioCh + 1) % RADIO.length; audio.click(); audio.radioTune(RADIO[world.radioCh], () => night && night.n >= 3); drawRadio(); toast(`${RADIO[world.radioCh].f} — ${RADIO[world.radioCh].name}`, 2); updateHUD(); break;
-    case 'flash': flashOn = !flashOn; world.flash.intensity = flashOn ? 26 : 0; audio.click(); updateHUD(); break;
+    case 'flash': flashOn = !flashOn; world.flash.intensity = flashOn ? 26 : 0; torchClick(flashOn); updateHUD(); break;
+    case 'coffee': sipCoffee(); break;
     case 'shutter': toggleShutter(); break;
     case 'phone': if (MPX.guest) { MPX.send({ t: 'act', a: 'phone' }); break; } if (!answerPhone()) { if (!playClip('pickup', { gain: 0.7 })) audio.click(); toast('Dial tone. Nobody to call at this hour.', 2.5); audio.tone(425, 0.6, { type: 'sine', gain: 0.03 }); } break;
     case 'admit': MPX.active ? MPX.vote(true) : decide(true); break;
@@ -2010,6 +2145,7 @@ Object.assign(MPX, {
       case 'vgone': if (V) { scene.remove(V.model.root); V = null; updateHUD(); } break;
       case 'say': say(m.key, { distort: m.distort, who: m.who ?? undefined, gain: m.gain, v: m.isV ? V : null }); break;
       case 'toast': toast(m.text, m.sec); break;
+      case 'sub': showSub(m.text, m.who, false); subTimer = 5; break;
       case 'sfx': if (typeof audio[m.m] === 'function') audio[m.m](...(m.a || [])); break;
       case 'flick': flickerT = Math.max(flickerT, m.sec); break;
       case 'mgrIn': managerEnters(); break;
@@ -2115,6 +2251,7 @@ function tick(dt, doRender) {
     if (!V) { night.wait -= dt; if (night.wait <= 0) spawnNext(); }
     visitorUpdate(dt);
     managerUpdate(dt);
+    coffeeUpdate(dt);
     // clock
     const target = (night.idx + (V && V.state !== 'walkin' ? 0.5 : 0)) / night.specs.length;
     night.clockFrac += (target - night.clockFrac) * dt * 0.5;
@@ -2174,6 +2311,8 @@ function tick(dt, doRender) {
   world.shutter.position.z = -0.925 + (world.shutterShake || 0) * 0.5;
   world.slats.forEach(s => { s.visible = s.position.y + off < 1.97; });
   if (phoneCallPending && playing) { phoneCallPending.t += dt; if (phoneCallPending.t > 15) answerPhone(); }
+  torchUpdate(dt);
+  if (!playing) coffeeUpdate(dt);
   // desk phone handset rattles while it rings
   if (world.phoneRing > 0) { world.phoneRing -= dt; world.phoneHand.position.y = 0.075 + Math.abs(Math.sin(time * 70)) * 0.006; world.phoneHand.rotation.z = Math.sin(time * 55) * 0.05; } else { world.phoneHand.position.y = 0.075; world.phoneHand.rotation.z = 0; }
   // barrier
