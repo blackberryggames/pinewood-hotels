@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Night Desk</title>
+<link rel="stylesheet" href="style.css?v=5">
+<script type="importmap">{ "imports": { "three": "./lib/three.module.js", "three/addons/": "./lib/jsm/" } }</script>
+<script src="voices/manifest.js"></script>
+<script src="voices/el.js"></script>
+<script src="sfx/sfx.js"></script>
+<script src="voices/manifest2.js"></script>
+<script src="voices/manifest3.js"></script>
+<script src="voices/manifest4.js"></script>
+<script src="voices/manifest5.js"></script>
+<script src="radio/radio.js"></script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="hudTop">
+    <div id="clockBox"><span id="clock">12:00 AM</span><span id="nightLbl">NIGHT 1</span></div>
+    <div id="queueLbl"></div>
+    <div id="strikes"><span>LOST <b id="casN">0</b>/3</span><span>WARNINGS <b id="vioN">0</b>/3</span></div>
+  </div>
+  <div id="crosshair"></div>
+  <div id="hoverLbl"></div>
+  <div id="actions">
+    <button data-act="talk"><kbd>T</kbd>Talk</button>
+    <button data-act="id"><kbd>I</kbd>Request ID</button>
+    <button data-act="ledger"><kbd>L</kbd>Ledger</button>
+    <button data-act="cam"><kbd>C</kbd>Camera</button>
+    <button data-act="flash"><kbd>F</kbd>Flashlight</button>
+    <button data-act="breaker" class="warn hidden" id="btnBreaker"><kbd>G</kbd>Breaker</button>
+    <button data-act="radio"><kbd>R</kbd>Radio</button>
+    <button data-act="channel"><kbd>N</kbd>Channel</button>
+    <button data-act="radioDown"><kbd>-</kbd>Vol</button>
+    <button data-act="radioUp"><kbd>=</kbd>Vol</button>
+    <button data-act="shutter" class="warn"><kbd>SPACE</kbd>Shutter</button>
+    <button data-act="admit" class="good"><kbd>A</kbd>Admit</button>
+    <button data-act="deny" class="bad"><kbd>D</kbd>Deny</button>
+  </div>
+  <div id="zoomHint">Hold <kbd>RMB</kbd> / <kbd>Z</kbd> to lean in &amp; inspect</div>
+</div>
+
+<div id="talkMenu" class="hidden panel">
+  <div class="ptitle">Intercom</div>
+  <button data-q="who">1. "Who are you?"</button>
+  <button data-q="where">2. "Where were you tonight?"</button>
+  <button data-q="strange">3. "Seen anything strange out there?"</button>
+  <button data-q="id">4. "Show me your ID."</button>
+  <button data-q="close" class="dim">Close (T)</button>
+</div>
+
+<div id="subs"></div>
+<div id="toast"></div>
+
+<div id="camOverlay" class="hidden">
+  <div class="rec"><span class="dot"></span>REC</div>
+  <div id="camName">CAM 01 — GATE</div>
+  <div id="camTime"></div>
+  <div class="camHelp"><kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> switch &nbsp; <kbd>C</kbd> exit</div>
+  <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+</div>
+
+<div id="docs" class="hidden">
+  <div id="docWrap"></div>
+  <div class="docBar"><button id="bUV"><kbd>U</kbd>UV Lamp</button><button id="bDocLedger"><kbd>L</kbd>Ledger</button><button id="bDocClose"><kbd>I</kbd>Put down</button></div>
+</div>
+
+<div id="ledger" class="hidden">
+  <div class="book">
+    <div class="tabs">
+      <button data-tab="res" class="on">Residents</button>
+      <button data-tab="arr">Arrivals</button>
+      <button data-tab="staff">Staff</button>
+      <button data-tab="notes">Notices</button>
+      <button data-tab="guide">Field Guide</button>
+      <button data-tab="rules">Rules</button>
+      <button data-tab="close" class="x">✕</button>
+    </div>
+    <div id="ledgerBody"></div>
+  </div>
+</div>
+
+<div id="menu" class="screen">
+  <div class="title glitch" data-text="NIGHT DESK">NIGHT DESK</div>
+  <div class="subtitle">Hollow Pines Hotel · Gate Checkpoint · Night Shift</div>
+  <div class="menuBtns">
+    <button id="bContinue" class="hidden">Continue</button>
+    <button id="bNew">New Shift</button>
+    <button id="bSaves">Saves &amp; History</button>
+    <button id="bHow">How To Play</button>
+    <button id="bQuit">Quit</button>
+  </div>
+  <div id="howTo" class="hidden panel">
+    <h3>How to play</h3>
+    <p>You work the night gate at the Hollow Pines Hotel. People walk up to your window all night. <b>Not all of them are people.</b></p>
+    <ul>
+      <li><b>Request ID</b> and compare name, room and ID number against the <b>Ledger</b>. A resident already marked <b>IN</b> cannot be outside.</li>
+      <li>Guests must be on tonight's <b>Arrivals</b> list with a matching booking code. Nobody else gets in.</li>
+      <li>Look closely (hold right mouse). Eyes, teeth, necks, hands, breath, shadows.</li>
+      <li>Check the <b>Camera</b>. Some of them only show their real face on camera.</li>
+      <li>Use the <b>Flashlight</b>. Some of their eyes shine like an animal's.</li>
+      <li>Radio: R on/off, N next station, - and = volume.</li>
+      <li>Slam the <b>Shutter</b> (SPACE) if something turns on you. You have seconds.</li>
+      <li>3 monsters inside and the hotel is lost. 3 violations and you're fired.</li>
+    </ul>
+    <p class="dim">Controls: Mouse look · RMB/Z zoom · T talk · I ID · L ledger · C camera · 1/2 switch cam · F flashlight · SPACE shutter · A admit · D deny · ESC pause</p>
+    <button id="bHowClose">Got it</button>
+  </div>
+  <div class="ver">Night Desk · headphones recommended<br>
+    <span class="credits">"Proportional Low Poly Man" by Robin Butler (sketchfab.com/StarTrekGuy) · "Low Poly Female Base Mesh" by Mesh-Base (sketchfab.com/mesh-base) · "Makima (Chainsaw Man) Realistic 3D Model" by Wim Reyes (sketchfab.com/wimreyes) — all CC-BY-4.0 · Voices and sound: ElevenLabs</span></div>
+</div>
+
+<div id="brief" class="screen hidden">
+  <div class="note">
+    <div class="noteHead">HOLLOW PINES HOTEL — MEMO TO NIGHT STAFF</div>
+    <div id="briefNight" class="big"></div>
+    <p id="briefText"></p>
+    <div id="briefNew"></div>
+    <button id="bStart">Start Shift</button>
+  </div>
+</div>
+
+<div id="report" class="screen hidden">
+  <div class="note">
+    <div class="noteHead">MORNING REPORT</div>
+    <div id="repTitle" class="big"></div>
+    <div id="repBody"></div>
+    <button id="bNext">Next Night</button>
+  </div>
+</div>
+
+<div id="over" class="screen hidden">
+  <div id="overTitle" class="title red"></div>
+  <div id="overText" class="subtitle"></div>
+  <div class="menuBtns">
+    <button id="bRetry">Retry Night</button>
+    <button id="bMenu">Main Menu</button>
+  </div>
+</div>
+
+<div id="saves" class="screen hidden">
+  <div class="note savesNote">
+    <div class="noteHead">HOLLOW PINES HOTEL — EMPLOYEE RECORDS</div>
+    <h3>Saved shifts</h3><div id="saveList"></div>
+    <h3>Past shifts</h3><div id="histList"></div>
+    <div class="saveBar"><button id="bClearHist">Clear history</button><button id="bSavesBack">Back</button></div>
+  </div>
+</div>
+
+<div id="pause" class="screen hidden">
+  <div class="title small">PAUSED</div>
+  <div class="panel opts">
+    <label>Volume <input id="optVol" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+    <label>Radio volume <input id="optRadio" type="range" min="0" max="1.5" step="0.05" value="1"></label>
+    <label>Mouse sensitivity <input id="optSens" type="range" min="0.3" max="2" step="0.1" value="1"></label>
+    <label>Pixel size <input id="optPix" type="range" min="1" max="4" step="1" value="2"></label>
+  </div>
+  <div class="menuBtns">
+    <button id="bResume">Resume</button>
+    <button id="bPMenu">Quit to Menu</button>
+  </div>
+</div>
+
+<div id="fade"></div>
+<div id="flash"></div>
+<div id="loading" class="screen"><div class="subtitle">Loading…</div></div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
