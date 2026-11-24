@@ -1,0 +1,1 @@
+window.RADIO_EL = ["classical", "country", "drill", "jazz", "jingle", "lofi", "menu", "menu2", "oldies", "rock", "synthwave", "trap"];

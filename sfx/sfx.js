@@ -1,0 +1,1 @@
+window.SFX_EL = ["bang1", "bang2", "buzzer", "distant", "growl", "jumpscare", "knock", "scream1", "scream2", "slam", "jumpscare_mgr"];
