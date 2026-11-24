@@ -29,3 +29,9 @@ then open http://localhost:8765 in your browser.
 
 See the credits line on the title screen ("Proportional Low Poly Man" by Robin Butler and
 "Low Poly Female Base Mesh" by Mesh-Base, both CC-BY-4.0, via Sketchfab).
+
+## Co-op (2 players)
+
+The **Co-op** button connects to the co-op server at `wss://pchost.straight2u.pro/ws` by default
+(you can type another address in the Co-op screen). The server must be running and tunnelled there;
+see the `server` folder that came with the desktop build.

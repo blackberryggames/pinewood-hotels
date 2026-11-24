@@ -1,11 +1,13 @@
 // Night Desk — a low poly checkpoint horror game
 import * as THREE from 'three';
 import { AudioSys } from './audio.js';
+import { openCustomizer, activeLook, lookToParams } from './custom.js';
 import { LAYER, PSX, mat, basic, patchPSX, setLayer, buildCharacter, buildGaunt, buildCrawler, buildWeeper, buildHound, buildScareFace, loadModels, buildRare, setPortraitRenderer, randomParams, drawPortrait, HAIRS, EYES } from './chars.js';
 
 const $ = id => document.getElementById(id);
 const VT = window.VOICE_TEXT || {};
 VT.mgr_visit = VT.mgr_visit || '';
+VT.mgr_vipcall = VT.mgr_vipcall || '';   // (transcript of the VIP complaint call, if you want a subtitle)
 VT.mgr_logbook = "Just grabbing the logbook. You're doing fine. Keep that shutter handy.";   // (put the clip's transcript here to show it as a subtitle)
 for (const k in VT) VT[k] = VT[k].replace(/\bI D\b/g, 'ID');
 const audio = new AudioSys();
@@ -21,13 +23,17 @@ const NAMES = {
 };
 for (const [n_, sl] of Object.entries(window.NAME_SLOTS || {})) NAMES[sl[0] === 'm' ? 'm' : 'f'].push(n_);
 const COUNT = { greet: 6, id: 4, where: 6, strange: 5, shutter: 5, admit: 4, deny: 4, guest: 2, stranger: 2, mgreet: 4, mwhere: 4, mstrange: 3, mshutter: 7, mturn: 3, madmit: 2, mdeny: 3 };
+// co-op state (filled in by mp.js when a 2-player session is running; single player never touches it)
+const MPX = { active: false, host: false, guest: false, locked: false, lookDelta() {}, send() {}, visitorGone() {} };
 const GAME_DATE = 'NOV 23 1999';
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 const nightDate = n => { const d = new Date(1999, 10, 22 + (n || 1)); return `${MONTHS[d.getMonth()]} ${d.getDate()} 1999`; };   // night 1 = NOV 23 1999
 const tonight = () => nightDate(typeof night !== 'undefined' && night ? night.n : (typeof G !== 'undefined' && G && G.night) || 1);
 const MANAGER = { name: 'Dan Mercer', role: 'Night Manager', code: 'MGR-0071' };
-(window.VOICE_EL ||= []).push('mgr_visit', 'mgr_logbook');
-if (!(window.SFX_EL ||= []).includes('jumpscare_mgr')) window.SFX_EL.push('jumpscare_mgr');   // sting when the manager bursts in   // the night manager at the window (ElevenLabs clip in voices/)
+const VIP_TITLES = ['Hotel Owner', 'Regional Director', 'State Health Inspector', 'Film Producer', "Senator's Aide", 'Bank Auditor', 'Insurance Assessor'];
+const VIP_PATIENCE = 30;   // seconds a real VIP will wait at the window before complaining
+(window.VOICE_EL ||= []).push('mgr_visit', 'mgr_logbook', 'mgr_vipcall');
+for (const k of ['jumpscare_mgr', 'ringtone', 'pickup', 'paper']) if (!(window.SFX_EL ||= []).includes(k)) window.SFX_EL.push(k);   // sting when the manager bursts in   // the night manager at the window (ElevenLabs clip in voices/)
 const GAME_YEAR = 1999;
 const dobStr = y => `${String(1 + Math.random() * 12 | 0).padStart(2, '0')}/${String(1 + Math.random() * 28 | 0).padStart(2, '0')}/${y}`;
 // an age no living person can have: born 130-210 years ago, or (sometimes) after tonight
@@ -71,7 +77,7 @@ const MTYPES = {
 const MAX_NIGHT = 11;
 const BRIEF = {
   1: { title: 'NIGHT ONE', key: 'mgr_n1', newTypes: ['hollow', 'grinner', 'gaunt'] },
-  2: { title: 'NIGHT TWO', key: 'mgr_n2', newTypes: ['mirror', 'seer', 'stretched', 'twitcher', 'weeper', 'puppet'], notes: ['<b>CAM 03 — THERMAL</b> is online (press 3 in camera view). The living show up warm. Most of them don\'t.', '<b>Staff</b> may come to the gate. Check their card against tonight\'s staff list.', 'Listen to the <b>radio</b>. Bulletins and calls appear under <b>Notices</b> in the ledger.'] },
+  2: { title: 'NIGHT TWO', key: 'mgr_n2', newTypes: ['mirror', 'seer', 'stretched', 'twitcher', 'weeper', 'puppet'], notes: ['<b>CAM 03 — THERMAL</b> is online (press 3 in camera view). The living show up warm. Most of them don\'t.', '<b>Staff</b> may come to the gate. Check their card against tonight\'s staff list.', '<b>VIPs</b> are high priority: check their gold pass against the <b>VIP</b> tab in the ledger (name, face, pass code) and decide fast. Keeping a real VIP waiting or turning one away costs warnings. Fakes do turn up.', 'Listen to the <b>radio</b>. Bulletins and calls appear under <b>Notices</b> in the ledger.'] },
   3: { title: 'NIGHT THREE', key: 'mgr_n3', extra: 'mgr_uv', newTypes: ['copy', 'lookalike', 'crawler', 'echo', 'mannequin', 'impostor'], notes: ['<b>The night manager</b>, Dan Mercer, may come to the gate. Check the date tonight against the <b>MANAGER ROTA</b> (Ledger → Staff). On his nights, let him in: he will step into the booth through the side door. On any other night it is not him, whatever badge it shows.', '<b>UV LAMP</b>: press U while looking at a card. Real resident and staff cards show a glowing hotel seal.', '<b>Check-outs</b>: residents leaving the hotel come to your window from inside. Check their card and stamp them out (A). Anyone who checked out no longer lives here.', 'The <b>power</b> can fail. Hit the breaker (G) fast — they know when the lights are off.'] },
   4: { title: 'NIGHT FOUR', key: 'mgr_n4', newTypes: ['still', 'hound', 'backwards', 'usher'], notes: ['<b>Resident cards</b>: every real one carries the red <b>VALIDATED</b> stamp and a <b>signature</b>, was <b>ISSUED</b> before tonight (NOV 23 1999), and reads exactly <b>HOLLOW PINES HOTEL</b>. A card missing any of that was not made here.'] },
   5: { title: 'NIGHT FIVE', key: 'mgr_n5b', text: "Night five. They are out in numbers tonight. Trust nothing, and keep your hand near the shutter. You're halfway there.", newTypes: ['ancient'], notes: ['Read every <b>date of birth</b>. It is <b>1999</b>. Nobody is 130 years old, and nobody at the window was born in the future.'] },
@@ -266,11 +272,13 @@ function buildWorld() {
   add(B(2.4, 0.65, 0.1), fw, 0, 2.275, -1.0);
   add(B(0.4, 1.0, 0.1), fw, -1.0, 1.45, -1.0);
   add(B(0.4, 1.0, 0.1), fw, 1.0, 1.45, -1.0);
-  add(B(0.1, 2.6, 2.4), [int, ext, ext, ext, ext, ext], -1.2, 1.3, 0.2);
-  add(B(0.1, 2.6, 2.4), [ext, int, ext, ext, ext, ext], 1.2, 1.3, 0.2);
-  add(B(2.4, 2.6, 0.1), [ext, ext, ext, ext, ext, int], 0, 1.3, 1.4);
-  add(B(2.5, 0.08, 2.5), M.dark, 0, 2.64, 0.2);
-  add(B(2.4, 0.05, 2.4), M.floor, 0, 0.0, 0.2);
+  world.boothSP = [add(B(0.1, 2.6, 2.4), [int, ext, ext, ext, ext, ext], -1.2, 1.3, 0.2), add(B(0.1, 2.6, 2.4), [ext, int, ext, ext, ext, ext], 1.2, 1.3, 0.2),
+    add(B(2.4, 2.6, 0.1), [ext, ext, ext, ext, ext, int], 0, 1.3, 1.4), add(B(2.5, 0.08, 2.5), M.dark, 0, 2.64, 0.2), add(B(2.4, 0.05, 2.4), M.floor, 0, 0.0, 0.2)];
+  // co-op booth: twice as wide and deeper (hidden in single player)
+  world.boothMP = [add(B(0.1, 2.6, 3.7), [int, ext, ext, ext, ext, ext], -2.4, 1.3, 0.8), add(B(0.1, 2.6, 3.7), [ext, int, ext, ext, ext, ext], 2.4, 1.3, 0.8),
+    add(B(4.9, 2.6, 0.1), [ext, ext, ext, ext, ext, int], 0, 1.3, 2.65), add(B(5.0, 0.08, 3.8), M.dark, 0, 2.64, 0.8), add(B(4.8, 0.05, 3.7), M.floor, 0, 0.0, 0.8),
+    add(B(1.2, 2.6, 0.1), fw, -1.8, 1.3, -1.0), add(B(1.2, 2.6, 0.1), fw, 1.8, 1.3, -1.0)];
+  world.boothMP.forEach(m_ => m_.visible = false);
   add(B(3.0, 0.08, 1.3), M.metal, 0, 2.72, -1.55, scene, { cast: true });
   // window frame + sill + glass
   add(B(1.7, 0.05, 0.6), M.metal, 0, 0.95, -1.0);
@@ -292,7 +300,7 @@ function buildWorld() {
   add(B(1.72, 0.14, 0.14), M.dark, 0, 2.02, -0.9);
   world.shutterProg = 0; world.shutterTarget = 0;
   // side door on the bare LEFT wall (clear of the poster and breaker on the right); the night manager comes in through it
-  add(B(0.012, 2.02, 0.72), basic(0x050505), -1.142, 1.01, 0.16);          // dark doorway behind the door
+  world.doorway = add(B(0.012, 2.02, 0.72), basic(0x050505), -1.142, 1.01, 0.16);          // dark doorway behind the door
   const bDoor = new THREE.Group(); bDoor.position.set(-1.13, 0, -0.2); scene.add(bDoor);
   add(B(0.035, 2.0, 0.7), M.wood, 0, 1.0, 0.36, bDoor);
   add(B(0.05, 0.04, 0.1), M.metal, 0.03, 1.0, 0.63, bDoor);
@@ -350,6 +358,17 @@ function buildWorld() {
   add(B(0.21, 0.003, 0.28), mat(0xe8e2d0), 0.22, 0.806, -0.68, scene, { rot: [0, 0.3, 0] });
   add(B(0.18, 0.003, 0.24), mat(0xd8d0b0), -0.05, 0.806, -0.75, scene, { rot: [0, -0.2, 0] });
   // radio
+  // desk phone (front-right corner): rings for calls from the rooms and from the manager
+  const phone = new THREE.Group(); phone.position.set(0.98, 0.805, -0.42); phone.rotation.y = -0.45; scene.add(phone);
+  const phM = mat(0x24221f), phD = mat(0x121110);
+  add(B(0.17, 0.05, 0.13), phM, 0, 0.025, 0, phone, { cast: true });
+  add(B(0.13, 0.012, 0.06), phD, 0, 0.056, 0.03, phone, { rot: [-0.25, 0, 0] });                 // keypad slope
+  for (let i = 0; i < 9; i++) add(B(0.016, 0.004, 0.012), mat(0xb8b0a0), -0.03 + (i % 3) * 0.03, 0.064 - Math.floor(i / 3) * 0.004, 0.012 + Math.floor(i / 3) * 0.016, phone, { rot: [-0.25, 0, 0] });
+  const hand = new THREE.Group(); hand.position.set(0, 0.075, -0.035); phone.add(hand);
+  add(B(0.2, 0.025, 0.04), phM, 0, 0, 0, hand, { cast: true });
+  add(B(0.05, 0.035, 0.055), phM, -0.085, -0.008, 0, hand); add(B(0.05, 0.035, 0.055), phM, 0.085, -0.008, 0, hand);
+  world.phoneHand = hand; world.phoneRing = 0;
+  phone.userData = { act: 'phone', label: 'Desk phone' };
   const radio = new THREE.Group(); radio.position.set(-0.84, 0.805, -0.47); radio.rotation.y = 0.45; scene.add(radio);
   add(B(0.26, 0.13, 0.09), mat(0x4a3424), 0, 0.065, 0, radio, { cast: true });
   add(B(0.1, 0.09, 0.005), mat(0x1a1612), -0.07, 0.065, 0.046, radio);                       // speaker cloth
@@ -365,7 +384,7 @@ function buildWorld() {
   world.radioOn = false; world.radioCh = 0;
   // poster + calendar
   const poster = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.55), mat(0xffffff, { map: T.poster }));
-  poster.position.set(1.14, 1.55, -0.3); poster.rotation.y = -Math.PI / 2; scene.add(poster);
+  poster.position.set(1.14, 1.55, -0.3); poster.rotation.y = -Math.PI / 2; scene.add(poster); world.poster = poster;
   // ceiling fluorescent
   world.tube = add(B(0.9, 0.04, 0.08), basic(0xe8fff0), 0, 2.58, 0.1);
   world.tubeLight = new THREE.PointLight(0xd8f0e0, 2.6, 7, 1.6); world.tubeLight.position.set(0, 2.45, 0.1); scene.add(world.tubeLight);
@@ -447,7 +466,7 @@ function buildWorld() {
   world.drops = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.92), new THREE.MeshBasicMaterial({ map: dt2, transparent: true, opacity: 0.55, depthWrite: false }));
   world.drops.position.set(0, 1.49, -1.006); world.drops.rotation.y = Math.PI; scene.add(world.drops);
   // breaker box on the right wall
-  const brk = new THREE.Group(); brk.position.set(1.13, 1.45, 0.55); brk.rotation.y = -Math.PI / 2; scene.add(brk);
+  const brk = new THREE.Group(); brk.position.set(1.13, 1.45, 0.55); brk.rotation.y = -Math.PI / 2; scene.add(brk); world.brk = brk;
   add(B(0.26, 0.36, 0.06), mat(0x4a4e48), 0, 0, 0, brk);
   add(B(0.2, 0.04, 0.01), basic(0xd8b020), 0, 0.14, 0.031, brk);
   world.breakerLever = add(B(0.05, 0.12, 0.05), mat(0x8a1a16), 0, 0, 0.05, brk);
@@ -489,7 +508,7 @@ function readSaves() {
   } catch (e) { return {}; }
 }
 function writeSaves(s) { try { localStorage.setItem(SAVE_KEY, JSON.stringify(s)); } catch (e) {} }
-function saveRun() { if (!G) return; G.saveId = G.saveId || 's' + Date.now(); const s = readSaves(); s[G.saveId] = { G, updated: Date.now() }; writeSaves(s); }
+function saveRun() { if (!G || G.mp) return; G.saveId = G.saveId || 's' + Date.now(); const s = readSaves(); s[G.saveId] = { G, updated: Date.now() }; writeSaves(s); }
 function loadRun(id) { const s = readSaves(); if (id) return s[id] ? s[id].G : null; const l = Object.values(s).sort((a, b) => b.updated - a.updated); return l.length ? l[0].G : null; }
 function deleteSave(id) { const s = readSaves(); delete s[id]; writeSaves(s); }
 function readHistory() { try { return JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); } catch (e) { return []; } }
@@ -603,6 +622,10 @@ const STAFF_ROLES = [
 ];
 const BULLETIN_COLORS = [['RED', 0x8a1a16], ['YELLOW', 0xa8902a], ['GREEN', 0x2a6a32], ['WHITE', 0xc8c8c0]];
 
+function visitorModel(v) {
+  const model = v.mt && v.mt.model;
+  return v.mt && v.mt.rare ? (buildRare() || buildCharacter(randomParams('f'), {})) : model === 'crawler' ? buildCrawler(randomParams(v.g)) : model === 'weeper' ? (buildWeeper() || buildGaunt()) : model === 'hound' ? (buildHound() || buildCrawler(randomParams(v.g))) : v.gaunt ? buildGaunt() : buildCharacter(v.p, v.an);
+}
 function makeVisitor(spec) {
   const v = { ...spec, human: !spec.monster, mt: spec.monster ? MTYPES[spec.monster] : null, asked: {}, idShown: false, state: 'walkin', t: 0 };
   let p, an = {};
@@ -615,7 +638,13 @@ function makeVisitor(spec) {
     v.gaunt = true; v.g = Math.random() < 0.5 ? 'm' : 'f'; v.name = '???';
     v.id = null; v.shouldAdmit = false; v.slot = v.g;
   } else {
-    if (v.kind === 'manager') {
+    if (v.kind === 'vip' || v.kind === 'fakevip') {
+      const vp = spec.vip; v.g = spec.g; v.name = spec.name;
+      p = spec.kind === 'vip' ? JSON.parse(JSON.stringify(spec.p)) : personParams(v.name + (spec.fake === 'wrongface' ? '#fake' : ''), v.g);
+      if (spec.kind === 'fakevip') { p.outfit = 'suit'; p.coat = false; p.backpack = false; p.hat = null; }
+      v.id = { type: 'vip', name: v.name, title: vp.title, code: spec.kind === 'vip' ? vp.code : mutateId(vp.code), photo: p, exp: '12/99', uv: spec.kind === 'vip' };
+      if (spec.kind === 'fakevip') { v.fakeWhy = spec.fake === 'notlisted' ? 'was not on tonight\'s VIP list' : 'wore the VIP\'s name but not their face, and the pass code was wrong'; if (spec.fake === 'notlisted') v.id.title = pick(VIP_TITLES); }
+    } else if (v.kind === 'manager') {
       const M_ = ensureManager(); v.g = 'm'; v.name = M_.name;
       p = JSON.parse(JSON.stringify(M_.p));
       const card = spec.monster ? Math.random() < 0.5 : Math.random() < 0.65;   // the real one usually carries his badge; fakes sometimes do too
@@ -692,7 +721,7 @@ function makeVisitor(spec) {
     }
     v.p = p; v.an = an;
     v.slot = v.kind === 'manager' ? 'm' : slotFor(v.name, v.g);
-    if (v.human) v.shouldAdmit = (v.kind === 'resident' && v.resident.status === 'OUT') || v.kind === 'guest' || v.kind === 'staff' || v.kind === 'checkout' || v.kind === 'manager';
+    if (v.human) v.shouldAdmit = (v.kind === 'resident' && v.resident.status === 'OUT') || v.kind === 'guest' || v.kind === 'staff' || v.kind === 'checkout' || v.kind === 'manager' || v.kind === 'vip';
     else v.shouldAdmit = false;
   }
   if (v.idWrong) v.wrong = (v.wrong ? v.wrong + ', and its card had ' : 'had ') + v.idWrong;
@@ -709,8 +738,7 @@ function makeVisitor(spec) {
   v.temp = v.human ? 1 : (v.mt.temp ?? 0.2);
   if (v.an && !v.human) v.an.monster = true;
   if (v.an && v.p && v.p.body2 && (v.an.wideMouth || v.an.smile || v.an.noLips || v.an.mannequin)) { v.p = { ...v.p, body2: false }; }   // mouth tells need the painted-mouth body
-  const model = v.mt && v.mt.model;
-  v.model = v.mt && v.mt.rare ? (buildRare() || buildCharacter(randomParams('f'), {})) : model === 'crawler' ? buildCrawler(randomParams(v.g)) : model === 'weeper' ? (buildWeeper() || buildGaunt()) : model === 'hound' ? (buildHound() || buildCrawler(randomParams(v.g))) : v.gaunt ? buildGaunt() : buildCharacter(v.p, v.an);
+  v.model = visitorModel(v);
   if (v.prop === 'box') {
     const bx = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.06, 0.36), mat(0xc8a060));
     bx.position.set(0, 1.0, 0.25); bx.castShadow = true; v.model.root.add(bx);
@@ -744,6 +772,13 @@ function planNight(n) {
     const g = Math.random() < 0.5 ? 'f' : 'm', name = takeName(g);
     staff.push({ ...s, name, g, code: `ST-${100 + Math.random() * 899 | 0}${String.fromCharCode(65 + Math.random() * 26 | 0)}`, p: personParams(name, g) });
   }
+  // VIPs: high-priority guests on tonight's VIP list (from night 2)
+  const vips = [];
+  if (n >= 2) for (let i = 0, k = Math.random() < 0.45 ? 2 : 1; i < k; i++) {
+    const g = Math.random() < 0.5 ? 'f' : 'm', name = takeName(g);
+    const p = personParams(name, g); p.outfit = pick(['suit', 'suit', 'jacket', 'coat']); p.coat = p.outfit === 'coat'; p.backpack = false; p.hat = null;
+    vips.push({ name, g, p, title: pick(VIP_TITLES), code: `VIP-${1000 + Math.random() * 8999 | 0}` });
+  }
   const specs = [];
   // monsters (at most one obvious one per night, two on the final night)
   for (let i = 0; i < nMon; i++) {
@@ -757,6 +792,13 @@ function planNight(n) {
     else target = take(R.filter(r => r.status === 'OUT'));
     target = target || take(R) || pick(R);
     specs.push({ kind: 'resident', monster: type, resident: target });
+  }
+  // VIP arrivals (real ones), plus now and then someone pretending to be one
+  for (const vp of vips) if (Math.random() < 0.8) specs.push({ kind: 'vip', name: vp.name, g: vp.g, p: vp.p, vip: vp });
+  if (n >= 3 && vips.length && Math.random() < 0.4) {
+    const vp = pick(vips);
+    if (Math.random() < 0.5) { const g = Math.random() < 0.5 ? 'f' : 'm'; specs.push({ kind: 'fakevip', name: takeName(g), g, fake: 'notlisted', vip: { ...vp } }); }
+    else specs.push({ kind: 'fakevip', name: vp.name, g: vp.g, fake: 'wrongface', vip: vp });
   }
   // radio bulletin: one disguised monster is described on the radio
   let bulletin = null;
@@ -818,7 +860,7 @@ function planNight(n) {
   const power = n >= 3 ? { at: 2 + Math.floor(Math.random() * (specs.length - 3)), done: false } : null;
   const notices = [];
   if (bulletin) notices.push(`RADIO — County sheriff: "Someone in a ${bulletin[0]} coat was seen walking the old road tonight. They are not who they say they are. Do not let them in."`);
-  return { n, specs, arrivals, staff, phone, power, bulletin, notices, idx: 0, log: [], wait: 3, clockFrac: 0, eventT: rand(14, 24), lightningT: rand(25, 60) };
+  return { n, specs, arrivals, staff, vips, phone, power, bulletin, notices, idx: 0, log: [], wait: 3, clockFrac: 0, eventT: rand(14, 24), lightningT: rand(25, 60) };
 }
 
 // ------------------------------------------------------------------ visitor control
@@ -829,17 +871,52 @@ const PATH_FROM_INSIDE = [[24, -3.4], [3.6, -3.4], [1.6, -2.9], [0.6, -2.0], [0,
 const STAND = { gaunt: -2.35, crawler: -2.1, weeper: -1.62, hound: -2.3 };
 const SPEED = { gaunt: 1.6, crawler: 2.6, weeper: 0.75, hound: 2.3 };
 
+function playClip(name, { gain = 1, dur = 0, loop = false, offset = 0 } = {}) {
+  const b = audio.sfxBufs && audio.sfxBufs[name]; if (!b || !audio.ctx) return null;
+  const ctx = audio.ctx, src = ctx.createBufferSource(), g = ctx.createGain();
+  src.buffer = b; src.loop = loop; g.gain.value = gain; src.connect(g); g.connect(audio.sfx);
+  const t = ctx.currentTime; src.start(t, offset);
+  if (dur) { g.gain.setValueAtTime(gain, t + Math.max(0, dur - 0.15)); g.gain.linearRampToValueAtTime(0.0001, t + dur); src.stop(t + dur + 0.05); }
+  return { stop() { try { g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.03); src.stop(ctx.currentTime + 0.15); } catch (e) {} } };
+}
+// paper rustle sample for IDs, slips and the ledger (falls back to the synth noise)
+{ const synthPaper = audio.paper.bind(audio); audio.paper = () => { if (!playClip('paper', { gain: 0.55, dur: 0.85 })) synthPaper(); }; }
+// ---- the desk phone: rings until you pick it up (click it or press P); answers itself after 15 s
+let phoneCallPending = null;
+function ringPhone(onAnswer) {
+  if (MPX.host) MPX.send({ t: 'ring' });
+  if (phoneCallPending) { phoneCallPending.ring && phoneCallPending.ring.stop(); }
+  const ring = playClip('ringtone', { gain: 0.6, loop: true });
+  if (!ring) for (let i = 0; i < 3; i++) setTimeout(() => { audio.tone(480, 0.35, { type: 'square', gain: 0.05 }); audio.tone(620, 0.35, { type: 'square', gain: 0.04, at: 0.02 }); }, i * 900);
+  phoneCallPending = { ring, onAnswer, t: 0 };
+  world.phoneRing = 99;
+  toast('The desk phone is ringing — click it or press P to answer.', 4);
+}
+function answerPhone() {
+  const c = phoneCallPending; if (!c) return false;
+  phoneCallPending = null; world.phoneRing = 0;
+  if (MPX.host) MPX.send({ t: 'ringstop' });
+  c.ring && c.ring.stop();
+  if (!playClip('pickup', { gain: 0.8 })) audio.click();
+  setTimeout(() => c.onAnswer && c.onAnswer(), 450);
+  return true;
+}
+// turning away a real VIP: the night manager rings the booth (his voice through the phone line)
+function vipComplaintCall(name) {
+  ringPhone(() => {
+    say('mgr_vipcall', { distort: 0.22, who: 'Manager (phone)', v: null, gain: 0.62 });
+    if (night) night.notices.push(`PHONE ${clockText(night.clockFrac)} — The night manager called about ${name}, a VIP who was turned away at the gate.`);
+  });
+}
 function phoneCall() {
   const r = night.phone.resident;
   night.phone.done = true;
-  for (let i = 0; i < 3; i++) setTimeout(() => { audio.tone(480, 0.35, { type: 'square', gain: 0.05 }); audio.tone(620, 0.35, { type: 'square', gain: 0.04, at: 0.02 }); }, i * 900);
-  toast('The booth phone is ringing...', 3);
-  setTimeout(() => {
+  ringPhone(() => {
     r.status = 'IN';
-    say('mgr_phone', { distort: 0, who: 'Manager (phone)', v: null });
+    say('mgr_phone', { distort: 0.12, who: 'Manager (phone)', v: null, gain: 0.7 });
     night.notices.push(`PHONE ${clockText(night.clockFrac)} — ${r.name} (Room ${r.room}) called from their room. Ledger updated: IN.`);
     setTimeout(() => toast(`Ledger updated: ${r.name}, Room ${r.room} is now IN.`, 6), 2500);
-  }, 2800);
+  });
 }
 
 function powerCut() {
@@ -853,6 +930,7 @@ function powerCut() {
 }
 function hitBreaker() {
   if (world.power || world.breakerT > 0) return;
+  if (MPX.guest) { MPX.send({ t: 'act', a: 'breaker' }); return; }
   audio.thud(); audio.click(); world.breakerT = 1.6; world.breakerArm = 1;
   setTimeout(() => { world.power = true; world.breakerT = 0; audio.buzz(); if (audio.hum) audio.hum.gain.value = 0.012; flicker(0.8); updateHUD(); toast('Power restored.', 2); }, 1600);
 }
@@ -872,6 +950,7 @@ function spawnNext() {
   V.pi = 1; V.speed = model ? SPEED[model] : (V.p && V.p.elder ? rand(1.0, 1.1) : rand(1.15, 1.45));
   scene.add(V.model.root);
   V.stepT = 0;
+  if (MPX.host) MPX.visitorSpawn(V);
   updateHUD();
   if (night.n === 1 && night.idx === 0) toast('Someone is coming. Wait for them to reach the window.', 5);
 }
@@ -892,12 +971,13 @@ function moveAlong(v, dt) {
 }
 
 let talkLevel = 0;
-async function say(key, { distort = V ? V.distort : 0, who, onEnd, v = V } = {}) {
+async function say(key, { distort = V ? V.distort : 0, who, onEnd, v = V, gain = 1 } = {}) {
   if (!key) return;
+  if (MPX.host) MPX.send({ t: 'say', key, distort, who: who ?? null, gain, isV: !!v && v === V });
   const text = VT[key] || '';
   showSub(text, who ?? (v ? (v.state === 'walkin' ? '' : v.name === '???' ? '???' : 'Visitor') : ''), distort > 0.55);
   if (v) v.talking = true;
-  const dur = await audio.playVoice(key, { rate: v ? v.rate : 1, distort, onEnd: () => { if (v) v.talking = false; onEnd && onEnd(); } });
+  const dur = await audio.playVoice(key, { rate: v ? v.rate : 1, distort, gain, onEnd: () => { if (v) v.talking = false; onEnd && onEnd(); } });
   subTimer = Math.max(2, dur + 0.8);
   return dur;
 }
@@ -913,12 +993,14 @@ function greet() {
   else if (v.kind === 'staff' || v.kind === 'fakestaff') key = v.lines.staff;
   else if (v.kind === 'delivery') key = v.lines.delivery;
   else if (v.kind === 'manager') key = 'mgr_visit';
+  else if (v.kind === 'vip' || v.kind === 'fakevip') { key = v.lines.guest; setTimeout(() => toast(`VIP — PRIORITY. Check the pass against the VIP list and decide within ${VIP_PATIENCE}s.`, 5), 1200); }
   else key = v.lines.stranger;
   say(key);
 }
 
 function ask(q) {
   if (!V || V.state !== 'wait') return;
+  if (MPX.guest) { if (q === 'close') setTalk(false); else if (q === 'id') requestID(); else MPX.send({ t: 'act', a: 'ask', q }); return; }
   if (q === 'close') { setTalk(false); return; }
   if (q === 'id') { requestID(); return; }
   if (V.shutterClosed) { toast('They can\'t hear you through the shutter.'); return; }
@@ -932,13 +1014,14 @@ function ask(q) {
 
 function requestID() {
   if (!V || V.state !== 'wait') return;
+  if (MPX.guest) { if (V.idShown) openDocs(); else MPX.send({ t: 'act', a: 'id' }); setTalk(false); return; }
   if (V.gaunt) { toast('It has no ID. It has no face.'); audio.growl(1, 0.4); return; }
   if (V.kind === 'manager' && !V.id) { toast('He pats his jacket. "Left my badge in the office. Come on, you know me."', 4.5); setTalk(false); return; }
   if (V.idShown) { openDocs(); return; }
   if (V.shutterClosed) { toast('Open the shutter first.'); return; }
   V.idShown = true;
   say(V.lines.id);
-  setTimeout(() => { if (!V) return; audio.paper(); world.idCard.visible = true; world.idCard.material = mat(V.id.type === 'res' ? 0xb8c8d8 : V.id.type === 'staff' ? 0xd89040 : 0xd8ccaa); toast('Documents slid under the glass. Click them or press I.', 3); }, 900);
+  setTimeout(() => { if (!V) return; audio.paper(); world.idCard.visible = true; world.idCard.material = mat(V.id.type === 'res' ? 0xb8c8d8 : V.id.type === 'staff' ? 0xd89040 : V.id.type === 'vip' ? 0xd8b040 : 0xd8ccaa); toast('Documents slid under the glass. Click them or press I.', 3); }, 900);
   setTalk(false);
 }
 
@@ -950,7 +1033,7 @@ function decide(admit) {
   v.state = 'leaving';
   world.idCard.visible = false;
   const correct = admit === v.shouldAdmit;
-  const entry = { name: v.name, kind: v.kind, monster: v.mt ? v.mt.name : null, admit, correct, wrong: v.wrong, resident: v.resident };
+  const entry = { name: v.name, kind: v.kind, monster: v.mt ? v.mt.name : null, admit, correct, wrong: v.wrong || v.fakeWhy, resident: v.resident };
   night.log.push(entry);
   if (admit) {
     audio.buzz(); world.barrierTarget = 1;
@@ -971,7 +1054,7 @@ function decide(admit) {
       if (v.human) { v.resident.status = 'CHECKED OUT'; night.notices.push(`CHECK-OUT ${clockText(night.clockFrac)} — ${v.name} (Room ${v.resident.room}) left the hotel.`); }
     }
   } else {
-    if (v.human) { say(v.lines.deny); if (!correct) G.vio++; }
+    if (v.human) { say(v.lines.deny); if (!correct) G.vio += v.kind === 'vip' ? 2 : 1; if (v.kind === 'vip') setTimeout(() => vipComplaintCall(v.name), 4500); }
     else if (v.gaunt) { audio.scream(1.2, 0.8, 0.4); }
     else say(v.lines.mdeny, { distort: 0.85 });
     v.path = PATH_DENY.map(p => new THREE.Vector3(p[0], 0, p[1]));
@@ -999,12 +1082,17 @@ function visitorUpdate(dt) {
     st.atWindow = true;
     v.waitT += dt;
     if (!v.human && v.shutterClosed && v.waitT > 2.5) { startBanging(); }
-    else if (!v.human && v.waitT > v.patience) {
+    else if (!v.human && v.waitT > v.patience && !devGod) {
       v.state = 'turning'; v.t = 0;
       if (v.model.parts.trueForm) setLayer(v.model.parts.trueForm, LAYER.COMMON);
       say(v.lines.mturn, { distort: 1 }); audio.growl(2.5, 0.5); flicker(3); closeOverlays();
       toast('SHUTTER! NOW!', 2.5);
     }
+    if (v.kind === 'vip' && v.human && !v.vipWarned && v.waitT > VIP_PATIENCE) {
+      v.vipWarned = true; G.vio++; updateHUD(); toast('You kept a VIP waiting. They called the owner. WARNING.', 5);
+      if (G.vio >= 3) setTimeout(() => gameOver('fired'), 2200);
+    }
+    if (v.kind === 'vip' && v.human && !v.vipWarned && Math.abs(v.waitT - (VIP_PATIENCE - 10)) < dt) toast('The VIP is getting impatient — 10 seconds.', 3);
     // humans get impatient with the shutter closed
     if (v.human && v.shutterClosed) {
       v.closedT = (v.closedT || 0) + dt;
@@ -1050,7 +1138,7 @@ function visitorUpdate(dt) {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
     st.shine = clamp((dir.dot(fwd) - 0.94) / 0.05, 0, 1);
   }
-  v.model.update(dt, st);
+  v.lastSt = st; v.model.update(dt, st);
   if (v.holdsBox) { v.model.parts.armL.rotation.x = -0.9; v.model.parts.armR.rotation.x = -0.9; }
   // breath
   if (!v.gaunt && !(v.an && v.an.noBreath) && v.state !== 'walkin') {
@@ -1064,8 +1152,9 @@ let inMgr = null, forceLookT = 0;
 function doorStep(dt) { world.bDoor.rotation.y += (world.bDoorTarget * 1.35 - world.bDoor.rotation.y) * Math.min(1, dt * 3); }   // swings inward
 function managerEnters() {
   if (inMgr || mode !== 'play') return;
+  if (MPX.host) MPX.send({ t: 'mgrIn' });
   const c = buildCharacter(G.mgr.p, {});
-  c.root.position.set(-1.0, 0, 0.18); c.root.rotation.y = Math.PI / 2; scene.add(c.root);
+  c.root.position.set(world.doorX + 0.13, 0, 0.18); c.root.rotation.y = Math.PI / 2; scene.add(c.root);
   inMgr = { c, t: 0, phase: 'in' };
   world.bDoorTarget = 1; audio.knock(); audio.click();
   forceLookT = 2.6; closeOverlays();                    // snap the view to the door...
@@ -1078,9 +1167,9 @@ function managerUpdate(dt) {
   const m = inMgr, r = m.c.root; m.t += dt;
   const go = (x, z, sp) => { const d = new THREE.Vector3(x - r.position.x, 0, z - r.position.z), L = d.length(); if (L < 0.02) return true; r.rotation.y = Math.atan2(d.x, d.z); r.position.add(d.multiplyScalar(Math.min(1, sp * dt / L))); return false; };
   let walking = false;
-  if (m.phase === 'in') { walking = true; if (go(-0.74, -0.2, 0.9)) { m.phase = 'stay'; m.t = 0; world.bDoorTarget = 0; m.talking = true; say('mgr_logbook', { who: G.mgr.name, v: null, distort: 0, onEnd: () => { m.talking = false; } }); } }
+  if (m.phase === 'in') { walking = true; if (go(world.doorX + (world.big ? 0.75 : 0.39), -0.2, 0.9)) { m.phase = 'stay'; m.t = 0; world.bDoorTarget = 0; m.talking = true; if (MPX.guest) setTimeout(() => { m.talking = false; }, 5200); else say('mgr_logbook', { who: G.mgr.name, v: null, distort: 0, onEnd: () => { m.talking = false; } }); } }
   else if (m.phase === 'stay') { const a = Math.atan2(cam.position.x - r.position.x, cam.position.z - r.position.z); let da = a - r.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); r.rotation.y += da * Math.min(1, dt * 4); if (m.t > 3 && (!m.talking || m.t > 12)) { m.phase = 'out'; world.bDoorTarget = 1; audio.click(); } }
-  else if (m.phase === 'out') { walking = true; if (go(-1.05, 0.18, 0.9)) { scene.remove(r); inMgr = null; world.bDoorTarget = 0; audio.knock(); return; } }
+  else if (m.phase === 'out') { walking = true; if (go(world.doorX + 0.08, 0.18, 0.9)) { scene.remove(r); inMgr = null; world.bDoorTarget = 0; audio.knock(); return; } }
   m.c.update(dt, { walking, speed: 0.7, talk: m.talking ? talkLevel : 0, look: 0 });
 }
 
@@ -1103,6 +1192,7 @@ function startBanging() {
 
 function removeVisitor() {
   if (!V) return;
+  if (MPX.host) MPX.visitorGone();
   scene.remove(V.model.root);
   V = null;
   night.idx++;
@@ -1113,6 +1203,7 @@ function removeVisitor() {
 
 // ------------------------------------------------------------------ shutter
 function toggleShutter(force) {
+  if (MPX.guest) { MPX.send({ t: 'act', a: 'shutter' }); return; }
   const close = force ?? world.shutterTarget < 0.5;
   if (close === (world.shutterTarget > 0.5)) return;
   world.shutterTarget = close ? 1 : 0;
@@ -1138,7 +1229,7 @@ function toggleShutter(force) {
 
 // ------------------------------------------------------------------ fx
 let flickerT = 0, lightning = 0;
-function flicker(sec) { flickerT = Math.max(flickerT, sec); }
+function flicker(sec) { flickerT = Math.max(flickerT, sec); if (MPX.host) MPX.send({ t: 'flick', sec }); }
 function emitPuff(p) {
   const f = world.puffs.find(x => x.life <= 0); if (!f) return;
   f.life = 1.8; f.s.visible = true; f.s.position.copy(p).add(new THREE.Vector3(0, -0.05, 0.05)); f.s.scale.setScalar(0.06);
@@ -1159,6 +1250,7 @@ function startScare(cause) {
   if (scareT >= 0) return;
   closeOverlays(); camMode = false; setCam(false);
   scareT = 0; G.deathCause = cause;
+  if (MPX.host) MPX.send({ t: 'scare', cause });
   world.scare.visible = true; world.scare.position.set(0, -0.05, -1.4); world.scare.scale.setScalar(0.8);
   audio.stopVoice();
   audio.jumpscare(); audio.bang(1.2);
@@ -1175,7 +1267,7 @@ function showSub(text, who, monster) {
   s.style.opacity = 1; subTimer = 4;
 }
 function glitchText(t) { return t.split('').map(c => Math.random() < 0.07 ? pick(['#', '%', '&', 'Ø', '▓', '░']) : c).join(''); }
-function toast(t, sec = 3) { const el = $('toast'); el.textContent = t; el.classList.add('show'); toastTimer = sec; }
+function toast(t, sec = 3) { if (MPX.active) t = t.replace(/Admit \(A\)/g, 'Approve (Enter)').replace(/Deny \(D\)/g, 'Deny (Backspace)').replace(/\(A\)/g, '(Enter)'); if (MPX.host) MPX.send({ t: 'toast', text: t, sec }); const el = $('toast'); el.textContent = t; el.classList.add('show'); toastTimer = sec; }
 
 function updateHUD() {
   if (!G) return;
@@ -1250,6 +1342,17 @@ function openDocs() {
       <div class="mrz">${mrz(`IDHP<<${last}<<${first}`, `${id.idnum.replace(/-/g, '')}<<${id.room}<<${id.exp.replace('/', '')}`)}</div>
       <div class="holo"></div></div>
       <div class="uvseal">${PINE_SVG}<span>HOLLOW PINES</span></div><div class="uvfib"></div>`;
+  } else if (id.type === 'vip') {
+    card.innerHTML = `<div class="ci"><div class="hdr">${PINE_SVG}<div class="org"><div>HOLLOW PINES HOTEL</div><small>VIP PRIORITY PASS</small></div><div class="tag vip">VIP</div></div>
+      <div class="bodyc"><div class="photo"><span class="ph"></span></div>
+        <div class="fields">
+          <div class="f wide"><label>GUEST</label><b>${id.name.toUpperCase()}</b></div>
+          <div class="f wide"><label>TITLE</label><b>${id.title}</b></div>
+          <div class="f"><label>PASS CODE</label><b class="red">${id.code}</b></div>
+          <div class="f"><label>VALID THRU</label><b>${id.exp}</b></div>
+        </div></div>
+      <div class="vipnote">PRIORITY ENTRY · DO NOT DETAIN</div><span class="bc"></span></div>
+      <div class="uvseal">${PINE_SVG}<span>VIP</span></div><div class="uvfib"></div>`;
   } else if (id.type === 'staff') {
     card.innerHTML = `<div class="ci"><div class="clip"></div>
       <div class="hdr">${PINE_SVG}<div class="org"><div>HOLLOW PINES</div><small>STAFF ACCESS BADGE</small></div></div>
@@ -1328,6 +1431,12 @@ function openLedger(tab = ledgerTab) {
       <table><thead><tr><th>PHOTO</th><th>NAME</th><th>ROLE</th><th>STAFF CODE</th><th>ON SITE</th></tr></thead><tbody><tr><td></td><td><b>${M_.name}</b></td><td>${M_.role}</td><td>${M_.code}</td><td>${M_.schedule.map(n => nightDate(n)).join('<br>')}</td></tr></tbody></table>`;
     const mcv = document.createElement('canvas'); mcv.width = 40; mcv.height = 48; drawPortrait(mcv, M_.p, { bg: '#b8b0a0' });
     rota.querySelector('td').appendChild(mcv); body.appendChild(rota);
+  } else if (tab === 'vip') {
+    const vips = night.vips || [];
+    body.innerHTML = `<h3>VIP LIST — ${tonight()}</h3><p class="dim">High priority. Real VIPs must not be kept waiting (${VIP_PATIENCE}s) and turning one away costs <b>two</b> warnings. Name, face and pass code must all match this list. Anyone else claiming to be a VIP is not one.</p>` +
+      (vips.length ? `<table><thead><tr><th>PHOTO</th><th>NAME</th><th>TITLE</th><th>PASS CODE</th></tr></thead><tbody></tbody></table>` : '<p><i>No VIPs expected tonight.</i></p>');
+    const tb = body.querySelector('tbody');
+    if (tb) for (const vp of vips) { const tr = document.createElement('tr'); tr.innerHTML = `<td></td><td><b>${vp.name}</b></td><td>${vp.title}</td><td>${vp.code}</td>`; const cv = document.createElement('canvas'); cv.width = 40; cv.height = 48; drawPortrait(cv, vp.p, { bg: '#c8b070' }); tr.firstChild.appendChild(cv); tb.appendChild(tr); }
   } else if (tab === 'notes') {
     body.innerHTML = `<h3>NOTICES — ${tonight()}</h3>` + (night.notices.length ? night.notices.map(t => `<div class="notice">${t}</div>`).join('') : '<p class="dim"><i>Nothing yet. Radio bulletins and phone calls will be logged here.</i></p>');
   } else if (tab === 'arr') {
@@ -1361,6 +1470,7 @@ function closeLedger() { ledgerOpen = false; $('ledger').classList.add('hidden')
 function showScreen(id) { ['menu', 'brief', 'report', 'over', 'pause', 'saves'].forEach(s => $(s).classList.toggle('hidden', s !== id)); }
 
 function toMenu() {
+  if (MPX.active) MPX.endSession();
   mode = 'menu'; showScreen('menu'); $('hud').classList.add('hidden'); closeOverlays();
   if (V) { scene.remove(V.model.root); V = null; }
   $('bContinue').classList.toggle('hidden', !loadRun());
@@ -1381,13 +1491,16 @@ function startBriefing() {
   $('briefText').textContent = b.text || ((VT[b.key] || '') + (b.extra ? ' ' + (VT[b.extra] || '') : ''));
   G.snapshot = null; G.snapshot = JSON.stringify(G);
   saveRun();
+  MPX.onBrief();
 }
 
 function startNight() {
+  if (phoneCallPending) { phoneCallPending.ring && phoneCallPending.ring.stop(); phoneCallPending = null; world.phoneRing = 0; }
   if (inMgr) { scene.remove(inMgr.c.root); inMgr = null; } world.bDoorTarget = 0;
   audio.stopVoice();
   if (V) { scene.remove(V.model.root); V = null; }
   night = planNight(G.night);
+  if (MPX.host) MPX.sendNight(true);
   mode = 'play'; showScreen(null); $('hud').classList.remove('hidden');
   fadeFx = 1; fadeTarget = 0;
   world.shutterTarget = 0; world.barrierTarget = 0;
@@ -1408,11 +1521,11 @@ function endNight() {
       if (victim) victim.alive = false;
       lines.push(`<div class="repLine bad">You let in a <b>${e.monster}</b> wearing ${e.name}'s face${e.wrong ? ' (it ' + e.wrong + ')' : ''}. ${victim ? `Room ${victim.room} — <b>${victim.name}</b> is missing. The door was open. The bed was wet.` : ''}</div>`);
     } else if (e.admit && !e.correct) {
-      lines.push(`<div class="repLine bad">You admitted <b>${e.name}</b>, who was not allowed in (${({ stranger: 'not a resident', fakeguest: 'booking did not match', fakestaff: 'staff card did not match the list', delivery: 'deliveries stay at the gate' })[e.kind] || 'resident was already inside'}). Violation.</div>`);
+      lines.push(`<div class="repLine bad">You admitted <b>${e.name}</b>, who was not allowed in (${({ stranger: 'not a resident', fakeguest: 'booking did not match', fakestaff: 'staff card did not match the list', delivery: 'deliveries stay at the gate', fakevip: 'their VIP pass ' + (e.wrong || 'was fake') })[e.kind] || 'resident was already inside'}). Violation.</div>`);
     } else if (e.kind === 'checkout' && !e.monster) {
       lines.push(e.admit ? `<div class="repLine good"><b>${e.name}</b> checked out.</div>` : `<div class="repLine bad">You refused to let <b>${e.name}</b> check out. Complaint filed.</div>`);
     } else if (!e.admit && !e.correct) {
-      lines.push(`<div class="repLine bad">You turned away <b>${e.name}</b>, a real ${({ guest: 'guest', staff: 'staff member' })[e.kind] || 'resident'}. They spent the night outside. Complaint filed.</div>`);
+      lines.push(`<div class="repLine bad">You turned away <b>${e.name}</b>, a real ${({ guest: 'guest', staff: 'staff member', vip: 'VIP', manager: 'night manager' })[e.kind] || 'resident'}. ${e.kind === 'vip' ? 'The owner heard about it by breakfast. Two warnings.' : 'They spent the night outside. Complaint filed.'}</div>`);
     } else if (!e.admit && e.monster) {
       lines.push(`<div class="repLine good">Stopped a <b>${e.monster}</b>${e.name !== '???' ? ` posing as ${e.name}` : ''}.${e.wrong ? ' It ' + e.wrong + '.' : ''}</div>`);
     }
@@ -1427,6 +1540,7 @@ function endNight() {
   $('hud').classList.add('hidden'); closeOverlays();
   if (G.night < MAX_NIGHT) { G.night++; saveRun(); } else { addHistory('survived'); deleteSave(G.saveId); }
   if (G.cas >= 3) setTimeout(() => startScare('silent'), 500);
+  if (MPX.host) MPX.send({ t: 'report', title: $('repTitle').textContent, html: $('repBody').innerHTML, next: $('bNext').textContent, G: MPX.liteG() });
 }
 
 function ending() {
@@ -1436,6 +1550,7 @@ function ending() {
   const lost = G.residents.filter(r => !r.alive).length;
   $('overText').innerHTML = `You survived ${MAX_NIGHT} nights at the Hollow Pines Hotel.<br>${lost ? `${lost} resident${lost > 1 ? 's' : ''} never came back down for breakfast.` : 'Every resident came down for breakfast. All of them. Exactly the right number.'}<br>Total wages: $${G.pay}.<br><br>The day manager hands you an envelope. "Same time tonight?"`;
   $('bRetry').textContent = 'New Shift';
+  if (MPX.host) MPX.send({ t: 'over', title: $('overTitle').textContent, html: $('overText').innerHTML, red: false });
 }
 
 function gameOver(cause) {
@@ -1446,6 +1561,8 @@ function gameOver(cause) {
   const t = { taken: ['YOU WERE TAKEN', 'You left the window open. It was faster than you.'], silent: ['THE HOTEL WENT SILENT', 'Too many of them got inside. By morning the halls were full of familiar faces, and none of them were right.'], fired: ['YOU\'RE FIRED', 'Too many violations. The residents complained, and management agreed. Someone else works the desk tomorrow night.'] }[cause];
   $('overTitle').textContent = t[0]; $('overText').textContent = t[1] + ` — Night ${G.night}`;
   addHistory(cause);
+  if (MPX.host) MPX.send({ t: 'over', title: $('overTitle').textContent, html: $('overText').innerHTML, red: true });
+  MPX.onOver();
 }
 
 function retry() {
@@ -1458,10 +1575,45 @@ function retry() {
 const mouse = new THREE.Vector2(), ndc = new THREE.Vector2();
 const ray = new THREE.Raycaster(); ray.layers.enableAll();
 let hoverObj = null;
+const crossEl = document.getElementById('crosshair');
+function placeCross(x, y) { crossEl.style.left = x + 'px'; crossEl.style.top = y + 'px'; }
 window.addEventListener('mousemove', e => {
+  if (MPX.locked) { MPX.lookDelta(e.movementX, e.movementY); return; }   // co-op: pointer-locked free look
+  if (MPX.active && (e.buttons & 1) && mode === 'play' && !docsOpen && !ledgerOpen && !camMode) MPX.lookDelta(e.movementX, e.movementY);   // (no pointer lock: drag to look)
   mouse.set(e.clientX / window.innerWidth * 2 - 1, -(e.clientY / window.innerHeight * 2 - 1));
-  ndc.copy(mouse);
+  ndc.copy(mouse); placeCross(e.clientX, e.clientY);
 });
+// ---- touch (phones / tablets): drag to look, tap to use what you tap
+let touchS = null;
+canvas.addEventListener('touchstart', e => {
+  const t = e.changedTouches[0]; touchS = { id: t.identifier, x: t.clientX, y: t.clientY, sx: t.clientX, sy: t.clientY, moved: false, at: performance.now() };
+  e.preventDefault();
+}, { passive: false });
+canvas.addEventListener('touchmove', e => {
+  if (!touchS) return;
+  const t = [...e.changedTouches].find(t_ => t_.identifier === touchS.id); if (!t) return;
+  const dx = t.clientX - touchS.x, dy = t.clientY - touchS.y; touchS.x = t.clientX; touchS.y = t.clientY;
+  if (Math.hypot(t.clientX - touchS.sx, t.clientY - touchS.sy) > 10) touchS.moved = true;
+  if (MPX.active) MPX.lookDelta(dx * 2.2, dy * 2.2);
+  else { mouse.x = clamp(mouse.x - dx / window.innerWidth * 2.4, -1, 1); mouse.y = clamp(mouse.y + dy / window.innerHeight * 2.4, -1, 1); }
+  e.preventDefault();
+}, { passive: false });
+canvas.addEventListener('touchend', e => {
+  if (!touchS) return;
+  const t = [...e.changedTouches].find(t_ => t_.identifier === touchS.id); const tap = t && !touchS.moved && performance.now() - touchS.at < 400; touchS = null;
+  if (!tap || mode !== 'play' || scareT >= 0) return;
+  if (docsOpen) { closeDocs(); return; }
+  if (camMode) return;
+  ndc.set(t.clientX / window.innerWidth * 2 - 1, -(t.clientY / window.innerHeight * 2 - 1));
+  const a = pickAt(ndc); if (a) action(a.userData.act);
+  e.preventDefault();
+}, { passive: false });
+function pickAt(v2) {
+  ray.setFromCamera(v2, cam);
+  const hits = ray.intersectObjects(INTER, true);
+  for (const h of hits) { if (!h.object.visible) continue; const a = findAct(h.object); return a && h.distance < (MPX.active ? 2.6 : 2.2) ? a : null; }
+  return null;
+}
 function interactables() {
   const list = [];
   scene.traverse(o => { if (o.userData && o.userData.act) list.push(o); });
@@ -1472,6 +1624,7 @@ function findAct(obj) { while (obj) { if (obj.userData && obj.userData.act) retu
 
 canvas.addEventListener('mousedown', e => {
   if (mode !== 'play' || scareT >= 0) return;
+  if (MPX.active && !MPX.locked && e.button === 0 && !docsOpen && !camMode && !ledgerOpen && canvas.requestPointerLock && !MPX.noLock && !hoverObj) { try { const r_ = canvas.requestPointerLock(); if (r_ && r_.catch) r_.catch(() => { MPX.noLock = true; toast('Drag with the mouse to look around.', 3); }); } catch (err) { MPX.noLock = true; } return; }
   if (e.button === 2) { zoom = true; return; }
   if (e.button !== 0) return;
   if (docsOpen) { closeDocs(); return; }
@@ -1500,8 +1653,9 @@ function action(a) {
     case 'channel': if (!world.radioOn) { world.radioOn = true; } else world.radioCh = (world.radioCh + 1) % RADIO.length; audio.click(); audio.radioTune(RADIO[world.radioCh], () => night && night.n >= 3); drawRadio(); toast(`${RADIO[world.radioCh].f} — ${RADIO[world.radioCh].name}`, 2); updateHUD(); break;
     case 'flash': flashOn = !flashOn; world.flash.intensity = flashOn ? 26 : 0; audio.click(); updateHUD(); break;
     case 'shutter': toggleShutter(); break;
-    case 'admit': decide(true); break;
-    case 'deny': decide(false); break;
+    case 'phone': if (MPX.guest) { MPX.send({ t: 'act', a: 'phone' }); break; } if (!answerPhone()) { if (!playClip('pickup', { gain: 0.7 })) audio.click(); toast('Dial tone. Nobody to call at this hour.', 2.5); audio.tone(425, 0.6, { type: 'sine', gain: 0.03 }); } break;
+    case 'admit': MPX.active ? MPX.vote(true) : decide(true); break;
+    case 'deny': MPX.active ? MPX.vote(false) : decide(false); break;
   }
 }
 document.querySelectorAll('#actions button').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); action(b.dataset.act); b.blur(); }));
@@ -1519,11 +1673,16 @@ window.addEventListener('keydown', e => {
   if (talkOpen && ['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(k)) { ask(['who', 'where', 'strange', 'id'][+k.slice(-1) - 1]); return; }
   if (docsOpen && k === 'KeyU') { setUV(!uvOn); return; }
   if (camMode && ['Digit1', 'Digit2', 'Digit3'].includes(k)) { const i = +k.slice(-1) - 1; if (i === 2 && night && night.n < 2) { toast('THERMAL camera offline until night 2.'); return; } switchCam(i); return; }
-  const map = { KeyT: 'talk', KeyI: 'id', KeyL: 'ledger', KeyC: 'cam', KeyF: 'flash', Space: 'shutter', KeyA: 'admit', KeyD: 'deny', KeyG: 'breaker', KeyR: 'radio', KeyN: 'channel', Minus: 'radioDown', Equal: 'radioUp', NumpadSubtract: 'radioDown', NumpadAdd: 'radioUp' };
+  const map = { KeyT: 'talk', KeyI: 'id', KeyL: 'ledger', KeyC: 'cam', KeyF: 'flash', Space: 'shutter', KeyA: 'admit', KeyD: 'deny', KeyG: 'breaker', KeyR: 'radio', KeyN: 'channel', KeyP: 'phone', Minus: 'radioDown', Equal: 'radioUp', NumpadSubtract: 'radioDown', NumpadAdd: 'radioUp' };
+  if (MPX.active) {   // co-op: WASD walks, so admit / deny move to Enter / Backspace
+    delete map.KeyA; delete map.KeyD; map.Enter = 'admit'; map.NumpadEnter = 'admit'; map.Backspace = 'deny';
+    if (MPX.MOVE_KEYS.includes(k)) { MPX.keys[k] = true; e.preventDefault(); return; }
+  }
   if (k === 'KeyZ') { zoom = true; return; }
   if (map[k]) { e.preventDefault(); action(map[k]); }
 });
-window.addEventListener('keyup', e => { if (e.code === 'KeyZ') zoom = false; });
+window.addEventListener('keyup', e => { if (e.code === 'KeyZ') zoom = false; MPX.keys[e.code] = false; });
+window.addEventListener('blur', () => { MPX.keys = {}; });
 
 function resume() { mode = 'play'; showScreen(null); }
 
@@ -1538,9 +1697,9 @@ $('bClearHist').onclick = () => { try { localStorage.removeItem(HIST_KEY); } cat
 $('bHow').onclick = () => $('howTo').classList.remove('hidden');
 $('bHowClose').onclick = () => $('howTo').classList.add('hidden');
 $('bQuit').onclick = () => window.close();
-$('bStart').onclick = () => startNight();
-$('bNext').onclick = () => { if ($('bNext').textContent === 'See the dawn') ending(); else startBriefing(); };
-$('bRetry').onclick = () => retry();
+$('bStart').onclick = () => { if (MPX.guest) return; startNight(); };
+$('bNext').onclick = () => { if (MPX.guest) return; if ($('bNext').textContent === 'See the dawn') ending(); else startBriefing(); };
+$('bRetry').onclick = () => { if (MPX.guest) return; retry(); };
 $('bMenu').onclick = () => toMenu();
 $('bResume').onclick = () => resume();
 $('bPMenu').onclick = () => toMenu();
@@ -1548,6 +1707,379 @@ $('optVol').oninput = e => audio.setVolume(+e.target.value);
 $('optSens').oninput = e => sens = +e.target.value;
 $('optRadio').oninput = e => { radioVol = +e.target.value; drawRadio(); };
 $('optPix').oninput = e => { pixelSize = +e.target.value; resize(); };
+
+// ------------------------------------------------------------------ dev menu
+// Double-click the WARNINGS counter during a shift, enter the password, and spawn whatever you like.
+const DEV_PASS = '676767';
+let devUnlocked = false, devGod = false, devWarp = 1, devClicks = [];
+function devEl(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; }
+const devModal = devEl(`<div id="devPass" class="panel hidden"><div class="ptitle">Restricted</div><p class="dim">Night desk maintenance access.</p>
+  <input id="devPw" type="password" placeholder="Password" autocomplete="off"><div class="devRow"><button id="devPwOk">Enter</button><button id="devPwX">Cancel</button></div><div id="devPwMsg" class="dim"></div></div>`);
+const devPanel = devEl(`<div id="devPanel" class="panel hidden"><div class="ptitle">Dev menu <button id="devX" class="devClose">×</button></div>
+  <h4>Spawn a visitor</h4>
+  <div class="devRow"><label>Who <select id="devWho"></select></label><label>Monster <select id="devMon"></select></label></div>
+  <div class="devRow"><button id="devNext">Spawn next</button><button id="devNow">Replace current</button></div>
+  <h4>Quick monsters (next in line)</h4><div id="devQuick" class="devGrid"></div>
+  <h4>Night</h4>
+  <div class="devRow"><label>Night <input id="devN" type="number" min="1" max="11" value="1"></label><button id="devJump">Jump to night</button><button id="devDawn">Skip to dawn</button></div>
+  <div class="devRow"><button id="devClear">Clear warnings &amp; lost</button><button id="devWarn">+1 warning</button><button id="devPay">+$100</button></div>
+  <h4>Events</h4>
+  <div class="devRow"><button id="devPower">Power cut</button><button id="devPhone">Phone call</button><button id="devMgrIn">Manager walks in</button><button id="devFlick">Flicker</button></div>
+  <h4>Cheats</h4>
+  <div class="devRow"><label><input id="devGod" type="checkbox"> Monsters never attack</label><label>Speed <select id="devSpd"><option>1</option><option>2</option><option>4</option></select>×</label></div>
+</div>`);
+document.body.appendChild(devModal); document.body.appendChild(devPanel);
+const WHO = [['resident', 'Resident (real)'], ['guest', 'Guest with booking'], ['stranger', 'Stranger (no booking)'], ['staff', 'Staff member'], ['delivery', 'Delivery driver'], ['vip', 'VIP (real)'], ['fakevip', 'Fake VIP'], ['manager', 'Night manager (real)'], ['impostor', 'Night manager (Impostor)'], ['checkout', 'Check-out (from inside)']];
+$('devWho').innerHTML = WHO.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+$('devMon').innerHTML = '<option value="">none (human)</option>' + Object.entries(MTYPES).map(([k, m]) => `<option value="${k}">${m.rare ? m.name + ' (Makima)' : m.name}</option>`).join('');
+const devLabel = (k, m) => m.rare ? `${m.name} (Makima)` : m.name;
+$('devQuick').innerHTML = Object.entries(MTYPES).map(([k, m]) => `<button data-mon="${k}">${devLabel(k, m)}</button>`).join('');
+
+function devName(g) { return G.spare && G.spare[g] && G.spare[g].length ? G.spare[g].pop() : pick(NAMES[g]); }
+function devSpec(who, mon) {
+  const R = G.residents.filter(r => r.alive && r.status !== 'CHECKED OUT');
+  const res = pick(R.filter(r => r.status === 'OUT')) || pick(R);
+  const g = Math.random() < 0.5 ? 'f' : 'm';
+  if (mon) {
+    const mt = MTYPES[mon];
+    if (mt.rare) return { kind: 'stranger', monster: mon };
+    if (mon === 'impostor') { const M_ = ensureManager(); M_.schedule = M_.schedule.filter(x => x !== night.n); return { kind: 'manager', monster: 'impostor' }; }
+    if (res) res.status = 'OUT';
+    return { kind: 'resident', monster: mon, resident: res };
+  }
+  switch (who) {
+    case 'resident': res.status = 'OUT'; return { kind: 'resident', resident: res };
+    case 'guest': { const name = devName(g); const a = { name, g, code: `BK-${10000 + Math.random() * 89999 | 0}`, nights: 2, p: personParams(name, g) }; night.arrivals.push(a); return { kind: 'guest', name, g, p: a.p, arrival: a }; }
+    case 'stranger': return { kind: 'stranger', name: devName(g), g };
+    case 'delivery': return { kind: 'delivery', name: devName(g), g };
+    case 'staff': {
+      let st = night.staff[0];
+      if (!st) { const name = devName(g); st = { ...STAFF_ROLES[0], name, g, code: `ST-${100 + Math.random() * 899 | 0}A`, p: personParams(name, g) }; night.staff.push(st); }
+      return { kind: 'staff', name: st.name, g: st.g, p: st.p, staff: st };
+    }
+    case 'vip': case 'fakevip': {
+      night.vips = night.vips || [];
+      let vp = night.vips[0];
+      if (!vp) { const name = devName(g); const pp = personParams(name, g); pp.outfit = 'suit'; pp.coat = false; vp = { name, g, p: pp, title: pick(VIP_TITLES), code: `VIP-${1000 + Math.random() * 8999 | 0}` }; night.vips.push(vp); }
+      if (who === 'vip') return { kind: 'vip', name: vp.name, g: vp.g, p: vp.p, vip: vp };
+      return { kind: 'fakevip', name: vp.name, g: vp.g, fake: 'wrongface', vip: vp };
+    }
+    case 'manager': { const M_ = ensureManager(); if (!M_.schedule.includes(night.n)) M_.schedule = [...M_.schedule, night.n].sort((a, b) => a - b); return { kind: 'manager' }; }
+    case 'impostor': return devSpec('', 'impostor');
+    case 'checkout': { const r = pick(R.filter(r_ => r_.status === 'IN')) || res; r.status = 'IN'; return { kind: 'checkout', resident: r }; }
+  }
+}
+function devSpawn(spec, replace) {
+  if (!night || mode !== 'play') { toast('Start a shift first.'); return; }
+  if (MPX.guest) { MPX.send({ t: 'devspawn', spec, replace }); toast('Sent to the host.'); return; }
+  night.specs.splice(night.idx + (V ? 1 : 0), 0, spec);
+  if (replace && V) { scene.remove(V.model.root); MPX.host && MPX.visitorGone(); V = null; night.idx++; world.barrierTarget = 0; closeOverlays(); }
+  if (!V) night.wait = 0.3;
+  updateHUD(); toast(`Dev: ${spec.monster ? MTYPES[spec.monster].name : spec.kind} ${replace || !V ? 'coming now' : 'is next in line'}.`, 2.5);
+}
+function devOpen() {
+  if (!devUnlocked) { $('devPass').classList.remove('hidden'); $('devPw').value = ''; $('devPwMsg').textContent = ''; setTimeout(() => $('devPw').focus(), 30); return; }
+  $('devN').value = night ? night.n : G ? G.night : 1;
+  $('devPanel').classList.toggle('hidden');
+}
+function devTry() {
+  if ($('devPw').value === DEV_PASS) { devUnlocked = true; $('devPass').classList.add('hidden'); audio.click(); devOpen(); }
+  else { $('devPwMsg').textContent = 'Access denied.'; audio.tone(90, 0.25, { type: 'square', gain: 0.05 }); $('devPw').select(); }
+}
+$('vioN').parentElement.style.cursor = 'pointer';
+$('vioN').parentElement.addEventListener('click', () => {
+  const t = performance.now(); devClicks = devClicks.filter(x => t - x < 700); devClicks.push(t);
+  if (devClicks.length >= 2) { devClicks = []; devOpen(); }
+});
+$('devPwOk').onclick = devTry; $('devPwX').onclick = () => $('devPass').classList.add('hidden');
+$('devPw').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') devTry(); if (e.key === 'Escape') $('devPass').classList.add('hidden'); });
+[devPanel, devModal].forEach(el => { el.addEventListener('keydown', e => e.stopPropagation()); el.addEventListener('mousedown', e => e.stopPropagation()); });
+$('devX').onclick = () => $('devPanel').classList.add('hidden');
+$('devNext').onclick = () => devSpawn(devSpec($('devWho').value, $('devMon').value), false);
+$('devNow').onclick = () => devSpawn(devSpec($('devWho').value, $('devMon').value), true);
+$('devQuick').addEventListener('click', e => { const b = e.target.closest('button'); if (b) devSpawn(devSpec('', b.dataset.mon), false); });
+$('devJump').onclick = () => { if (!G || MPX.guest) return; G.night = clamp(+$('devN').value | 0, 1, MAX_NIGHT); $('devPanel').classList.add('hidden'); if (V) { scene.remove(V.model.root); V = null; } startBriefing(); };
+$('devDawn').onclick = () => { if (night && mode === 'play' && !MPX.guest) { if (V) { scene.remove(V.model.root); V = null; } endNight(); $('devPanel').classList.add('hidden'); } };
+$('devClear').onclick = () => { if (!G) return; G.vio = 0; G.cas = 0; updateHUD(); };
+$('devWarn').onclick = () => { if (!G) return; G.vio++; updateHUD(); };
+$('devPay').onclick = () => { if (!G) return; G.pay += 100; toast('+$100'); };
+$('devPower').onclick = () => { if (night && mode === 'play') { night.power = night.power || { at: 0, done: false }; powerCut(); } };
+$('devPhone').onclick = () => { if (!night || mode !== 'play') return; const r = pick(G.residents.filter(r_ => r_.alive && r_.status === 'OUT')); if (!r) return; night.phone = { at: night.idx, resident: r, done: false }; night.specs.splice(night.idx + (V ? 2 : 1), 0, { kind: 'resident', monster: 'copy', resident: r }); phoneCall(); };
+$('devMgrIn').onclick = () => { if (mode === 'play') managerEnters(); };
+$('devFlick').onclick = () => flicker(2);
+$('devGod').onchange = e => { devGod = e.target.checked; };
+$('devSpd').onchange = e => { devWarp = +e.target.value; };
+
+
+// ------------------------------------------------------------------ co-op (2 players)
+// One player hosts (their game runs the night), the other joins and mirrors it. Both share a bigger booth,
+// walk around with WASD, and BOTH must approve before anyone is let in (either can deny).
+// Admit / deny are on Enter / Backspace here so walking never triggers them. Single player is untouched.
+const MP_URL_KEY = 'nightdesk_mp_url';
+const MP_DEFAULT_URL = location.port === '3000' ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
+  : /straight2u\.pro$/.test(location.hostname) ? `wss://${location.host}/ws` : 'wss://pchost.straight2u.pro/ws';
+Object.assign(MPX, {
+  ws: null, code: '', you: -1, peer: null, peerLook: null, myLook: null, keys: {}, votes: [false, false], vuid: 0, uid: 0,
+  me: { x: -0.6, z: 0.4 }, sendT: 0, nightT: 0, S: null, avatar: null, avTarget: null, tag: null, ring: null,
+  MOVE_KEYS: ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight'],
+  send(m) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); },
+  liteG() { return G ? { ...G, snapshot: null } : null; },
+  lookDelta(dx, dy) {
+    look.ty -= dx * 0.0024 * sens; look.tp = clamp(look.tp - dy * 0.0024 * sens, -1.25, 1.1);
+    look.yaw = look.ty; look.pitch = look.tp;
+  },
+  visitorSpawn(v) {
+    v.uid = ++this.uid; this.votes = [false, false]; this.vuid = v.uid;
+    this.send({ t: 'vis', uid: v.uid, kind: v.kind, name: v.name, g: v.g, p: v.p, an: v.an, id: v.id, slip: v.slip || null, mt: v.spec && v.spec.monster || (v.mt ? Object.keys(MTYPES).find(k => MTYPES[k] === v.mt) : null),
+      human: v.human, gaunt: !!v.gaunt, rate: v.rate, prop: v.prop || null, x: v.model.root.position.x, z: v.model.root.position.z });
+  },
+  visitorGone() { this.send({ t: 'vgone' }); },
+  sendNight(full) {
+    if (!night) return;
+    const { specs, log, phone, ...rest } = night;
+    this.send({ t: 'night', full, len: specs.length, night: JSON.parse(JSON.stringify(rest)), G: this.liteG() });
+  },
+  onBrief() {
+    const g = this.guest;
+    $('bStart').disabled = g; $('bStart').textContent = g ? 'Waiting for the host...' : 'Start Shift';
+    if (this.host) this.send({ t: 'brief', G: this.liteG() });
+  },
+  onOver() { $('bRetry').disabled = this.guest; },
+  vote(val) {
+    if (!V || V.state !== 'wait') return;
+    if (this.guest) { this.send({ t: 'vote', val }); toast(val ? 'You approved. Waiting for your partner...' : 'You denied entry.', 3); return; }
+    this.castVote(0, val);
+  },
+  castVote(who, val) {
+    if (!V || V.state !== 'wait' || V.uid !== this.vuid) return;
+    if (!val) { MPX.quiet = true; toast(who === 0 ? 'Entry denied.' : 'Your partner denied entry.', 2.5); MPX.quiet = false; this.send({ t: 'toast', text: who === 1 ? 'You denied entry.' : 'Your partner denied entry.', sec: 2.5 }); decide(false); return; }
+    if (V.shutterClosed) { if (who === 0) toast('Open the shutter first.'); else this.send({ t: 'toast', text: 'Open the shutter first.', sec: 2 }); return; }
+    this.votes[who] = true;
+    const need = this.peer ? 2 : 1, have = this.votes.filter(Boolean).length;
+    if (have >= need) { decide(true); return; }
+    MPX.quiet = true; toast(who === 0 ? 'You approved. Waiting for your partner (Enter).' : 'Your partner approved. Press Enter to let them in, Backspace to deny.', 4); MPX.quiet = false;
+    this.send({ t: 'toast', text: who === 1 ? 'You approved. Waiting for your partner...' : 'Your partner approved. Press Enter to let them in, Backspace to deny.', sec: 4 });
+  },
+  // ---- session lifecycle
+  connect(url, then) {
+    try { if (this.ws) this.ws.close(); } catch (e) {}
+    lobbyMsg('Connecting...');
+    let ws; try { ws = new WebSocket(url); } catch (e) { lobbyMsg('Bad server address.'); return; }
+    this.ws = ws;
+    ws.onopen = () => { lobbyMsg('Connected.'); then(); };
+    ws.onerror = () => lobbyMsg('Could not reach the server. Is it running (and is the tunnel up)?');
+    ws.onclose = () => { if (this.ws !== ws) return; this.ws = null; if (this.active) { toast('Disconnected from the co-op server.', 5); if (this.guest) { this.endSession(); toMenu(); } else { this.peer = null; this.guest = false; } } else lobbyMsg('Disconnected.'); };
+    ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } this.onMsg(m); };
+  },
+  begin(host) {
+    this.active = true; this.host = host; this.guest = !host; this.keys = {}; this.uid = 0;
+    this.me = { x: host ? -0.7 : 0.7, z: 0.5 }; look.ty = look.yaw = 0; look.tp = look.pitch = -0.05;
+    setBigBooth(true); this.spawnAvatar();
+    document.querySelectorAll('#actions button').forEach(b => { if (b.dataset.act === 'admit') b.innerHTML = '<kbd>Enter</kbd>Approve'; if (b.dataset.act === 'deny') b.innerHTML = '<kbd>Bksp</kbd>Deny'; });
+    $('coop').classList.add('hidden');
+  },
+  endSession() {
+    const was = this.active;
+    this.active = false; this.host = false; this.guest = false; this.peer = null; this.keys = {};
+    if (document.pointerLockElement) document.exitPointerLock();
+    try { this.send({ t: 'leave' }); this.ws && this.ws.close(); } catch (e) {}
+    this.ws = null;
+    if (this.avatar) { scene.remove(this.avatar.root); this.avatar = null; }
+    if (this.ring) { this.ring.stop(); this.ring = null; }
+    if (was) setBigBooth(false);
+    $('bStart').disabled = false; $('bStart').textContent = 'Start Shift'; $('bRetry').disabled = false; $('bNext').disabled = false;
+    document.querySelectorAll('#actions button').forEach(b => { if (b.dataset.act === 'admit') b.innerHTML = '<kbd>A</kbd>Admit'; if (b.dataset.act === 'deny') b.innerHTML = '<kbd>D</kbd>Deny'; });
+  },
+  spawnAvatar() {
+    if (this.avatar) { scene.remove(this.avatar.root); this.avatar = null; }
+    if (!this.peer || !this.peerLook) return;
+    try { this.avatar = buildCharacter(lookToParams(this.peerLook), {}); } catch (e) { console.warn(e); return; }
+    this.avatar.root.position.set(this.host ? 0.7 : -0.7, 0, 0.5); scene.add(this.avatar.root);
+    // name tag
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 48; const g = cv.getContext('2d');
+    g.font = 'bold 26px monospace'; g.textAlign = 'center'; g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, 6, 256, 36); g.fillStyle = '#ffe0a0'; g.fillText(this.peer, 128, 34);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), depthTest: false, transparent: true }));
+    sp.scale.set(0.5, 0.094, 1); sp.position.y = 1.98; this.avatar.root.add(sp);
+  },
+  // ---- per frame (both players)
+  tick(dt, playing) {
+    if (playing && this.locked && (ledgerOpen || docsOpen || talkOpen || camMode)) document.exitPointerLock();
+    const k = this.keys, moving = playing && !ledgerOpen && !docsOpen && !camMode && scareT < 0;
+    let fx = 0, fz = 0;
+    if (moving) { if (k.KeyW || k.ArrowUp) fz -= 1; if (k.KeyS || k.ArrowDown) fz += 1; if (k.KeyA || k.ArrowLeft) fx -= 1; if (k.KeyD || k.ArrowRight) fx += 1; }
+    this.walking = !!(fx || fz);
+    if (this.walking) {
+      const L = Math.hypot(fx, fz), sp = (k.ShiftLeft || k.ShiftRight ? 2.6 : 1.5) * dt / L, y = look.yaw;
+      const dx = (fx * Math.cos(y) + fz * Math.sin(y)) * sp, dz = (-fx * Math.sin(y) + fz * Math.cos(y)) * sp;
+      const me = this.me; me.x = clamp(me.x + dx, -2.12, 2.12); me.z = clamp(me.z + dz, -0.75, 2.38);
+      if (Math.abs(me.x) < 1.42 && me.z < -0.1) me.z = -0.1;                  // the desk
+      if (this.avatar) { const a = this.avatar.root.position, ddx = me.x - a.x, ddz = me.z - a.z, d = Math.hypot(ddx, ddz); if (d < 0.45 && d > 0.001) { me.x = a.x + ddx / d * 0.45; me.z = a.z + ddz / d * 0.45; } }
+      this.bob = (this.bob || 0) + dt * (k.ShiftLeft || k.ShiftRight ? 13 : 9);
+    }
+    // partner avatar
+    if (this.avatar && this.avTarget) {
+      const r = this.avatar.root, T = this.avTarget, a = Math.min(1, dt * 12);
+      r.position.x += (T.x - r.position.x) * a; r.position.z += (T.z - r.position.z) * a;
+      let da = (T.yaw + Math.PI) - r.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); r.rotation.y += da * a;
+      this.avatar.update(dt, { walking: T.walk, speed: 0.9, talk: 0, look: 0 });
+      if (this.avatar.parts.head) this.avatar.parts.head.rotation.x = -T.pitch * 0.6;
+    }
+    // network
+    this.sendT -= dt;
+    if (this.sendT <= 0 && this.ws) {
+      this.sendT = 0.066;
+      this.send({ t: 'p', x: +this.me.x.toFixed(3), z: +this.me.z.toFixed(3), yaw: +look.yaw.toFixed(3), pitch: +look.pitch.toFixed(3), walk: this.walking });
+      if (this.host && night) {
+        const v = V;
+        this.send({ t: 's', idx: night.idx, len: night.specs.length, cf: night.clockFrac, cas: G.cas, vio: G.vio, sh: world.shutterTarget, br: world.barrierTarget, pw: world.power, card: world.idCard.visible,
+          v: v ? { uid: v.uid, x: +v.model.root.position.x.toFixed(3), z: +v.model.root.position.z.toFixed(3), ry: +v.model.root.rotation.y.toFixed(3), state: v.state, st: v.lastSt || null, idShown: !!v.idShown, sc: !!v.shutterClosed } : null });
+        this.nightT -= 0.066; if (this.nightT <= 0) { this.nightT = 3; this.sendNight(false); }
+      }
+    }
+  },
+  placeCamera(dt, lean) {
+    const b = this.walking ? Math.sin(this.bob) * 0.025 : 0;
+    cam.position.set(this.me.x - Math.sin(look.yaw) * lean, 1.58 + b, this.me.z - Math.cos(look.yaw) * lean);
+  },
+  // ---- guest: mirror the host's night
+  guestTick(dt) {
+    const S = this.S; if (!S || !night) return;
+    night.idx = S.idx; if (night.specs.length !== S.len) night.specs = new Array(S.len);
+    night.clockFrac = S.cf; G.cas = S.cas; G.vio = S.vio;
+    MPX.applying = true; world.shutterTarget = S.sh; world.barrierTarget = S.br; world.power = S.pw; world.idCard.visible = S.card; MPX.applying = false;
+    $('clock').textContent = clockText(Math.min(night.clockFrac, 0.999)); $('camTime').textContent = `${tonight()}  ${clockText(night.clockFrac)}`;
+    if (V && S.v && S.v.uid === V.uid) {
+      const r = V.model.root, a = Math.min(1, dt * 12);
+      r.position.x += (S.v.x - r.position.x) * a; r.position.z += (S.v.z - r.position.z) * a;
+      let da = S.v.ry - r.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); r.rotation.y += da * a;
+      if (V.state !== S.v.state) {
+        if (V.state === 'wait' && S.v.state !== 'wait') closeOverlays();
+        if (S.v.state === 'turning' && V.model.parts.trueForm) setLayer(V.model.parts.trueForm, LAYER.COMMON);
+        V.state = S.v.state; updateHUD();
+      }
+      V.idShown = S.v.idShown; V.shutterClosed = S.v.sc;
+      const st = { ...(S.v.st || {}) }; st.talk = V.talking ? talkLevel : 0;
+      V.model.update(dt, st);
+      if (V.holdsBox) { V.model.parts.armL.rotation.x = -0.9; V.model.parts.armR.rotation.x = -0.9; }
+    }
+    this.hudT = (this.hudT || 0) - dt; if (this.hudT <= 0) { this.hudT = 0.25; updateHUD(); }
+  },
+  guestVisitor(m) {
+    if (V) { scene.remove(V.model.root); V = null; }
+    const v = { uid: m.uid, kind: m.kind, name: m.name, g: m.g, p: m.p, an: m.an || {}, id: m.id, slip: m.slip, mt: m.mt ? MTYPES[m.mt] : null, human: m.human, gaunt: m.gaunt, rate: m.rate || 1, state: 'walkin', idShown: false, prop: m.prop };
+    v.model = visitorModel(v);
+    if (v.prop === 'box') {
+      const bx = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.06, 0.36), mat(0xc8a060)); bx.position.set(0, 1.0, 0.25); v.model.root.add(bx);
+      v.model.parts.armL.rotation.x = -0.9; v.model.parts.armR.rotation.x = -0.9; v.holdsBox = true;
+    }
+    v.model.root.position.set(m.x, 0, m.z); scene.add(v.model.root);
+    V = v; updateHUD();
+  },
+  // ---- messages
+  onMsg(m) {
+    switch (m.t) {
+      case 'created': this.code = m.code; this.you = 0; lobbyRoom(); break;
+      case 'joined': this.code = m.code; this.you = m.you; this.peer = m.peer; this.peerLook = m.peerLook; lobbyRoom(); break;
+      case 'peer': this.peer = m.name; this.peerLook = m.look; lobbyRoom(); if (this.active) { this.spawnAvatar(); toast(`${m.name} joined. They'll see the next visitor.`, 4); if (mode === 'play') { this.sendNight(true); if (V) this.visitorSpawn(V); } else if (mode === 'brief') this.send({ t: 'start', G: this.liteG() }); } break;
+      case 'left': this.peer = null; if (this.avatar) { scene.remove(this.avatar.root); this.avatar = null; } lobbyRoom(); if (this.active) toast(`${m.name || 'Your partner'} left the shift.`, 5); break;
+      case 'slot': this.you = m.you; if (this.active && this.guest && m.you === 0) { toast('The host left. Back to the menu.', 5); this.endSession(); toMenu(); } break;
+      case 'error': lobbyMsg(m.msg); break;
+      case 'p': this.avTarget = m; break;
+      default: if (this.guest || (!this.active && this.you >= 1)) this.guestMsg(m); else if (this.host) this.hostMsg(m);
+    }
+  },
+  hostMsg(m) {
+    if (m.t === 'vote') { this.castVote(1, !!m.val); return; }
+    if (m.t === 'act') {
+      if (mode !== 'play') return;
+      if (m.a === 'id') requestID(); else if (m.a === 'ask') ask(m.q); else if (m.a === 'shutter') toggleShutter(); else if (m.a === 'breaker') hitBreaker(); else if (m.a === 'phone') answerPhone();
+      return;
+    }
+    if (m.t === 'devspawn') { const sp = m.spec; if (sp.resident) sp.resident = G.residents.find(r => r.name === sp.resident.name) || sp.resident; devSpawn(sp, m.replace); }
+  },
+  guestMsg(m) {
+    switch (m.t) {
+      case 'start': G = m.G; this.begin(false); startBriefing(); break;
+      case 'brief': G = m.G; if (!this.active) this.begin(false); if (V) { scene.remove(V.model.root); V = null; } startBriefing(); break;
+      case 'night':
+        G = m.G || G; { const prevIdx = night && night.idx; night = m.night; night.specs = new Array(m.len); if (!m.full && prevIdx != null) night.idx = prevIdx; }
+        if (m.full) { if (V) { scene.remove(V.model.root); V = null; } if (inMgr) { scene.remove(inMgr.c.root); inMgr = null; } audio.stopVoice(); mode = 'play'; showScreen(null); $('hud').classList.remove('hidden'); fadeFx = 1; fadeTarget = 0; updateHUD(); toast('Shift started. You are the second clerk. Click to look around, WASD to walk.', 5); }
+        break;
+      case 's': this.S = m; if (!m.v && V) { scene.remove(V.model.root); V = null; updateHUD(); } break;
+      case 'vis': this.guestVisitor(m); break;
+      case 'vgone': if (V) { scene.remove(V.model.root); V = null; updateHUD(); } break;
+      case 'say': say(m.key, { distort: m.distort, who: m.who ?? undefined, gain: m.gain, v: m.isV ? V : null }); break;
+      case 'toast': toast(m.text, m.sec); break;
+      case 'sfx': if (typeof audio[m.m] === 'function') audio[m.m](...(m.a || [])); break;
+      case 'flick': flickerT = Math.max(flickerT, m.sec); break;
+      case 'mgrIn': managerEnters(); break;
+      case 'ring': if (this.ring) this.ring.stop(); this.ring = playClip('ringtone', { gain: 0.6, loop: true }); world.phoneRing = 99; break;
+      case 'ringstop': if (this.ring) { this.ring.stop(); this.ring = null; } world.phoneRing = 0; playClip('pickup', { gain: 0.7 }); break;
+      case 'scare': startScare(m.cause); break;
+      case 'report': G = m.G || G; mode = 'report'; showScreen('report'); $('hud').classList.add('hidden'); closeOverlays(); if (V) { scene.remove(V.model.root); V = null; }
+        $('repTitle').textContent = m.title; $('repBody').innerHTML = m.html; $('bNext').textContent = 'Waiting for the host...'; $('bNext').disabled = true; break;
+      case 'over': if (scareT >= 0) return; mode = 'over'; showScreen('over'); $('hud').classList.add('hidden'); closeOverlays(); if (V) { scene.remove(V.model.root); V = null; }
+        $('overTitle').textContent = m.title; $('overTitle').classList.toggle('red', !!m.red); $('overText').innerHTML = m.html; $('bRetry').disabled = true; break;
+    }
+  },
+});
+document.addEventListener('pointerlockchange', () => { MPX.locked = document.pointerLockElement === canvas; });
+if (location.search.includes('debug')) window.__mpx = MPX;
+// host -> guest: replay the procedural sound effects too
+for (const m_ of ['growl', 'scream', 'stinger', 'bang', 'knock', 'buzz', 'thud', 'jumpscare', 'footstep', 'static']) {
+  const f_ = audio[m_]; if (typeof f_ !== 'function') continue;
+  audio[m_] = function (...a_) { if (MPX.host) MPX.send({ t: 'sfx', m: m_, a: a_.filter(x => typeof x !== 'function') }); return f_.apply(audio, a_); };
+}
+
+function setBigBooth(on) {
+  world.big = on;
+  world.boothSP.forEach(m_ => m_.visible = !on); world.boothMP.forEach(m_ => m_.visible = on);
+  world.poster.position.x = on ? 2.34 : 1.14; world.brk.position.x = on ? 2.33 : 1.13;
+  world.bDoor.position.x = on ? -2.33 : -1.13; world.doorway.position.x = on ? -2.342 : -1.142; world.doorX = world.bDoor.position.x;
+  if (!world.mpLight) { world.mpLight = new THREE.PointLight(0xe8f0e0, 0, 7, 1.6); world.mpLight.position.set(0, 2.45, 1.2); scene.add(world.mpLight); }
+  world.mpLight.intensity = on ? 1.4 : 0;
+  if (!on) { cam.position.set(0, 1.32, 0.28); look.ty = look.yaw = 0; look.tp = look.pitch = -0.05; }
+}
+world.doorX = -1.13;
+
+// ---- lobby UI
+const coopEl = document.createElement('div'); coopEl.id = 'coop'; coopEl.className = 'screen hidden';
+coopEl.innerHTML = `<div class="coopBox panel"><div class="ptitle">Co-op · 2 players</div>
+  <p class="dim">Share the night shift with a friend. Both of you must approve a visitor before they get in. Walk with <kbd>WASD</kbd>, approve with <kbd>Enter</kbd>, deny with <kbd>Backspace</kbd>.</p>
+  <div class="coopRow"><label>You</label><b id="coopMe"></b><button id="coopEdit">Edit character</button></div>
+  <div class="coopRow"><label>Server</label><input id="coopUrl" spellcheck="false"></div>
+  <div class="coopRow"><button id="coopHost">Host a shift</button><span class="or">or</span><input id="coopCode" maxlength="5" placeholder="CODE"><button id="coopJoin">Join</button></div>
+  <div id="coopRoom" class="hidden"><div class="coopCode">Room <b id="coopCodeOut"></b></div><div id="coopPlayers"></div><button id="coopStart" class="hidden">Start the shift</button></div>
+  <div id="coopMsg" class="dim"></div>
+  <div class="coopRow"><button id="coopBack">Back</button></div></div>`;
+document.body.appendChild(coopEl);
+coopEl.addEventListener('keydown', e => e.stopPropagation());
+function lobbyMsg(t) { $('coopMsg').textContent = t; }
+function lobbyRoom() {
+  $('coopRoom').classList.remove('hidden'); $('coopCodeOut').textContent = MPX.code;
+  const me = MPX.myLook ? MPX.myLook.name : 'You';
+  $('coopPlayers').innerHTML = `<div>1. ${MPX.you === 0 ? me + ' (you, host)' : (MPX.peer || '...') + ' (host)'}</div><div>2. ${MPX.you === 1 ? me + ' (you)' : MPX.peer || '<i>waiting for a friend... share the room code</i>'}</div>`;
+  $('coopStart').classList.toggle('hidden', MPX.you !== 0);
+  lobbyMsg(MPX.you === 0 ? (MPX.peer ? 'Ready. Start whenever you like.' : 'You can start alone; a friend can still join mid-shift.') : 'Waiting for the host to start...');
+}
+function openCoop() {
+  audio.init();
+  MPX.myLook = activeLook();
+  $('coopMe').textContent = MPX.myLook.name;
+  let saved = localStorage.getItem(MP_URL_KEY);
+  if (saved && /localhost|127\.0\.0\.1/.test(saved) && !/localhost|127\.0\.0\.1/.test(location.hostname)) saved = null;   // a test address never sticks outside testing
+  $('coopUrl').value = saved || MP_DEFAULT_URL;
+  $('coopRoom').classList.add('hidden'); lobbyMsg('');
+  showScreen(null); coopEl.classList.remove('hidden');
+}
+function coopUrl() { const u = $('coopUrl').value.trim() || MP_DEFAULT_URL; try { if (u === MP_DEFAULT_URL) localStorage.removeItem(MP_URL_KEY); else localStorage.setItem(MP_URL_KEY, u); } catch (e) {} return u; }
+$('coopHost').onclick = () => MPX.connect(coopUrl(), () => MPX.send({ t: 'create', name: MPX.myLook.name, look: MPX.myLook }));
+$('coopJoin').onclick = () => { const code = $('coopCode').value.trim().toUpperCase(); if (code.length < 4) { lobbyMsg('Enter the 5-letter room code.'); return; } MPX.connect(coopUrl(), () => MPX.send({ t: 'join', code, name: MPX.myLook.name, look: MPX.myLook })); };
+$('coopStart').onclick = () => { newRun(); G.mp = true; MPX.begin(true); MPX.send({ t: 'start', G: MPX.liteG() }); startBriefing(); };
+$('coopBack').onclick = () => { MPX.endSession(); coopEl.classList.add('hidden'); toMenu(); };
+$('coopEdit').onclick = () => { coopEl.classList.add('hidden'); openCustomizer(() => { openCoop(); }); };
+$('bCoop').onclick = () => openCoop();
+$('bChar').onclick = () => { audio.init(); showScreen(null); openCustomizer(() => toMenu()); };
 
 // ------------------------------------------------------------------ ambient events
 function ambientEvent() {
@@ -1567,7 +2099,7 @@ const DEBUG = location.search.includes('debug');
 function frame() {
   if (DEBUG && document.hidden) setTimeout(frame, 33); else requestAnimationFrame(frame);
   const real = Math.min(0.05, clock.getDelta());
-  const n = DEBUG ? (window.__warp || 1) : 1;
+  const n = devWarp > 1 ? devWarp : DEBUG ? (window.__warp || 1) : 1;
   for (let i = 0; i < n; i++) tick(i === n - 1 ? real : 0.05, i === n - 1);
 }
 function tick(dt, doRender) {
@@ -1576,7 +2108,9 @@ function tick(dt, doRender) {
   talkLevel = talkLevel * 0.6 + audio.level() * 0.4;
 
   const playing = mode === 'play';
-  if (playing && scareT < 0) {
+  if (MPX.active) MPX.tick(dt, playing);
+  if (playing && scareT < 0 && MPX.guest) MPX.guestTick(dt);
+  else if (playing && scareT < 0) {
     // spawn
     if (!V) { night.wait -= dt; if (night.wait <= 0) spawnNext(); }
     visitorUpdate(dt);
@@ -1607,7 +2141,7 @@ function tick(dt, doRender) {
 
   // look
   if (!camMode && (playing || mode === 'menu' || mode === 'brief')) {
-    if (playing && !ledgerOpen && !docsOpen) {
+    if (playing && !ledgerOpen && !docsOpen && !MPX.active) {
       look.ty = -mouse.x * 0.95 * sens; look.tp = clamp(mouse.y * 0.55 * sens - 0.1, -0.72, 0.3);
     } else if (mode !== 'play') {
       look.ty = Math.sin(time * 0.15) * 0.12; look.tp = -0.02 + Math.sin(time * 0.11) * 0.03;
@@ -1628,6 +2162,7 @@ function tick(dt, doRender) {
   cam.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
   const lean = zoom && playing ? 0.22 : 0;
   cam.position.z += ((0.28 - lean) - cam.position.z) * Math.min(1, dt * 6);
+  if (MPX.active) MPX.placeCamera(dt, lean);
   if (shake > 0) { cam.rotation.x += (Math.random() - 0.5) * shake * 0.03; cam.rotation.y += (Math.random() - 0.5) * shake * 0.03; shake = Math.max(0, shake - dt * 2); }
 
   // shutter animation (falls fast, rolls up slow)
@@ -1638,6 +2173,9 @@ function tick(dt, doRender) {
   world.shutter.position.y = off; world.shutter.position.x = (Math.random() - 0.5) * world.shutterShake;
   world.shutter.position.z = -0.925 + (world.shutterShake || 0) * 0.5;
   world.slats.forEach(s => { s.visible = s.position.y + off < 1.97; });
+  if (phoneCallPending && playing) { phoneCallPending.t += dt; if (phoneCallPending.t > 15) answerPhone(); }
+  // desk phone handset rattles while it rings
+  if (world.phoneRing > 0) { world.phoneRing -= dt; world.phoneHand.position.y = 0.075 + Math.abs(Math.sin(time * 70)) * 0.006; world.phoneHand.rotation.z = Math.sin(time * 55) * 0.05; } else { world.phoneHand.position.y = 0.075; world.phoneHand.rotation.z = 0; }
   // barrier
   world.barrierUp += (world.barrierTarget - world.barrierUp) * Math.min(1, dt * 2.5);
   world.barrierArm.rotation.x = world.barrierUp * 1.35;
@@ -1682,13 +2220,13 @@ function tick(dt, doRender) {
 
   // hover picking
   hoverObj = null;
-  if (playing && !camMode && !ledgerOpen && !docsOpen && scareT < 0) {
-    ray.setFromCamera(ndc, cam);
-    const hits = ray.intersectObjects(INTER, true);
-    for (const h of hits) { if (!h.object.visible) continue; const a = findAct(h.object); if (a && h.distance < 2.2) { hoverObj = a; } break; }
-  }
+  const aiming = playing && !camMode && !ledgerOpen && !docsOpen && scareT < 0;
+  if (aiming) { if (MPX.locked) ndc.set(0, 0); hoverObj = pickAt(ndc); }
   $('hoverLbl').textContent = hoverObj ? hoverObj.userData.label : '';
-  canvas.style.cursor = hoverObj ? 'pointer' : 'default';
+  canvas.style.cursor = aiming ? 'none' : 'default';            // the crosshair dot is the cursor while you play
+  crossEl.classList.toggle('hot', !!hoverObj);
+  if (MPX.locked) placeCross(window.innerWidth / 2, window.innerHeight / 2);
+  $('hoverLbl').style.left = crossEl.style.left || '50%'; $('hoverLbl').style.top = `calc(${crossEl.style.top || '50%'} + 16px)`;
   world.btns.forEach(b => b.material.emissiveIntensity = b === hoverObj ? 0.9 : 0.25);
 
   // timers
